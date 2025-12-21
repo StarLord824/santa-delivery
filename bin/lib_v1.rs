@@ -382,10 +382,7 @@ impl GameState {
                     if !gift.collected {
                         // Pulsing gift effect
                         let pulse = ((self.frame as f32 / 10.0 + idx as f32).sin() * 2.0) as f32;
-                        // Yellow gift box with red bow
-                        rect!(x = (gift.x - 6.0) as i32, y = (gift.y - 6.0 + pulse) as i32, w = 12, h = 12, color = 0xffd700ff);
-                        rect!(x = (gift.x - 1.0) as i32, y = (gift.y - 6.0 + pulse) as i32, w = 2, h = 12, color = 0xff0000ff);
-                        rect!(x = (gift.x - 6.0) as i32, y = (gift.y - 1.0 + pulse) as i32, w = 12, h = 2, color = 0xff0000ff);
+                        sprite!("gift", x = gift.x - 6.0, y = gift.y - 6.0 + pulse);
                     }
                 }
             }
@@ -418,19 +415,14 @@ impl GameState {
                 
                 // Draw traps (visible and pulsing in Hurry mode!)
                 for i in 0..self.trap_count as usize {
-                    let pulse = ((self.frame as f32 / 5.0).sin() * 3.0).abs() as u32;
-                    // Menacing red trap
-                    circ!(x = self.trap_x[i] as i32, y = self.trap_y[i] as i32, d = 12 + pulse, color = 0xaa0000ff);
-                    circ!(x = self.trap_x[i] as i32, y = self.trap_y[i] as i32, d = 6, color = 0x440000ff);
+                    let pulse = ((self.frame as f32 / 5.0).sin() * 3.0).abs() as f32;
+                    sprite!("trap", x = self.trap_x[i] - 6.0 - pulse / 2.0, y = self.trap_y[i] - 6.0 - pulse / 2.0);
                 }
                 
                 // Draw remaining gifts
                 for gift in &self.gifts {
                     if !gift.collected {
-                        // Yellow gift box with red bow
-                        rect!(x = (gift.x - 6.0) as i32, y = (gift.y - 6.0) as i32, w = 12, h = 12, color = 0xffd700ff);
-                        rect!(x = (gift.x - 1.0) as i32, y = (gift.y - 6.0) as i32, w = 2, h = 12, color = 0xff0000ff);
-                        rect!(x = (gift.x - 6.0) as i32, y = (gift.y - 1.0) as i32, w = 12, h = 2, color = 0xff0000ff);
+                        sprite!("gift", x = gift.x - 6.0, y = gift.y - 6.0);
                     }
                 }
             }
@@ -458,17 +450,7 @@ impl GameState {
                 // Draw Krampus with menacing effect
                 let shake_x = ((self.frame as f32 / 2.0).sin() * 2.0) as f32;
                 let shake_y = ((self.frame as f32 / 3.0).cos() * 2.0) as f32;
-                // Dark red Krampus body with horns
-                let kx = (self.krampus_x - 12.0 + shake_x) as i32;
-                let ky = (self.krampus_y - 12.0 + shake_y) as i32;
-                rect!(x = kx, y = ky + 6, w = 24, h = 18, color = 0x8b0000ff); // Body
-                circ!(x = kx + 12, y = ky + 8, d = 16, color = 0x660000ff); // Head
-                // Horns
-                rect!(x = kx + 2, y = ky, w = 4, h = 10, color = 0x333333ff);
-                rect!(x = kx + 18, y = ky, w = 4, h = 10, color = 0x333333ff);
-                // Eyes (glowing)
-                circ!(x = kx + 8, y = ky + 8, d = 4, color = 0xff0000ff);
-                circ!(x = kx + 16, y = ky + 8, d = 4, color = 0xff0000ff);
+                sprite!("krampus", x = self.krampus_x - 12.0 + shake_x, y = self.krampus_y - 12.0 + shake_y);
                 
                 // Warning text
                 if (self.frame / 15) % 2 == 0 {
@@ -520,14 +502,7 @@ impl GameState {
                 0.0
             };
             
-            // Green elf player with red hat
-            let px = (self.player_x - 8.0) as i32;
-            let py = (self.player_y - 8.0 + wobble) as i32;
-            rect!(x = px + 2, y = py + 6, w = 12, h = 10, color = 0x228b22ff); // Body (green)
-            circ!(x = px + 8, y = py + 6, d = 10, color = 0xffdbacff); // Face (skin)
-            // Red pointy hat
-            rect!(x = px + 4, y = py, w = 8, h = 6, color = 0xff0000ff);
-            rect!(x = px + 6, y = py - 2, w = 4, h = 4, color = 0xff0000ff);
+            sprite!("player", x = self.player_x - 8.0, y = self.player_y - 8.0 + wobble);
         }
 
         // ====================================================================
