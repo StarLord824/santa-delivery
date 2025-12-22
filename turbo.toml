@@ -6,3 +6,6 @@ authors = ["StarLord824"]
 [canvas]
 width = 384
 height = 216
+
+[font]
+default-size = 14

@@ -10,6 +10,7 @@ struct Chimney {
     x: f32,        // World X position (scrolls left)
     y: f32,        // Fixed Y position (height)
     delivered: bool,
+    style: u8,     // House style (0-2 for variation)
 }
 
 /// A gift that's been dropped and is falling
@@ -118,8 +119,6 @@ const PLAYER_SPEED: f32 = 3.0;
 // Base colors
 const COLOR_SNOW: u32 = 0xf0f8ffff;
 const COLOR_CHIMNEY: u32 = 0x8b4513ff;
-const COLOR_ROOF: u32 = 0xfffffaff;
-const COLOR_GIFT: u32 = 0xff0000ff;
 const COLOR_GOLD: u32 = 0xffd700ff;
 
 // Level-based sky colors (environment changes)
@@ -202,17 +201,17 @@ impl GameState {
     /// Play background music based on current game mode
     fn play_mode_music(&self) {
         // Stop all music tracks first
-        audio::stop("title_music");
-        audio::stop("game_music");
-        audio::stop("krampus_music");
-        audio::stop("gameover_music");
+        audio::stop("title");
+        audio::stop("game");
+        audio::stop("krampus");
+        audio::stop("game_over");
         
         // Play appropriate track for current mode
         match self.mode {
-            MODE_TITLE => audio::play("title_music"),
-            MODE_DELIVERING => audio::play("game_music"),
-            MODE_KRAMPUS => audio::play("krampus_music"),
-            MODE_GAMEOVER => audio::play("gameover_music"),
+            MODE_TITLE => audio::play("title"),
+            MODE_DELIVERING => audio::play("game"),
+            MODE_KRAMPUS => audio::play("krampus"),
+            MODE_GAMEOVER => audio::play("game_over"),
             _ => {}
         }
     }
@@ -221,23 +220,23 @@ impl GameState {
     fn update_music(&self) {
         match self.mode {
             MODE_TITLE => {
-                if !audio::is_playing("title_music") {
-                    audio::play("title_music");
+                if !audio::is_playing("title") {
+                    audio::play("title");
                 }
             }
             MODE_DELIVERING => {
-                if !audio::is_playing("game_music") {
-                    audio::play("game_music");
+                if !audio::is_playing("game") {
+                    audio::play("game");
                 }
             }
             MODE_KRAMPUS => {
-                if !audio::is_playing("krampus_music") {
-                    audio::play("krampus_music");
+                if !audio::is_playing("krampus") {
+                    audio::play("krampus");
                 }
             }
             MODE_GAMEOVER => {
-                if !audio::is_playing("gameover_music") {
-                    audio::play("gameover_music");
+                if !audio::is_playing("game_over") {
+                    audio::play("game_over");
                 }
             }
             _ => {}
@@ -303,7 +302,7 @@ impl GameState {
         
         // Start game music
         self.play_mode_music();
-        Self::play_sfx("start");
+        Self::play_sfx("start_g");
     }
     
     fn reset_game(&mut self) {
@@ -345,10 +344,13 @@ impl GameState {
         // Spawn chimneys on the ground (78% of screen height)
         let ground_y = SCREEN_H * 0.78;
         let y = self.random_range(ground_y - 30.0, ground_y - 10.0);
+        // Random house style (0-2)
+        let style = (self.random_range(0.0, 3.0) as u8).min(2);
         self.chimneys.push(Chimney {
             x: SCREEN_W + 40.0,
             y,
             delivered: false,
+            style,
         });
         
         // Next chimney spawn distance (varies, more space for larger screen)
@@ -756,20 +758,30 @@ impl GameState {
             }
         }
         
-        // Stars (far layer) - more stars for larger screen
-        for i in 0..30 {
+        // Stars (far layer) - enhanced with twinkle effect
+        for i in 0..40u32 {
             let star_x = ((i * 47 + 10) as f32 - (self.scroll_x * 0.1) % SCREEN_W) as i32;
-            let star_y = (i * 7 % 80 + 5) as i32;
+            let star_y = (i * 7 % 90 + 5) as i32;
             let twinkle = if (self.frame + i * 17) % 60 < 30 { 0xffffffff } else { 0xffffff88 };
-            circ!(x = star_x + shake_x, y = star_y + shake_y, d = 2, color = twinkle);
+            let size = if i % 5 == 0 { 3 } else { 2 };
+            circ!(x = star_x + shake_x, y = star_y + shake_y, d = size, color = twinkle);
+            // Add cross sparkle for brighter stars
+            if i % 7 == 0 {
+                rect!(x = star_x + shake_x - 2, y = star_y + shake_y, w = 5, h = 1, color = 0xffffff66);
+                rect!(x = star_x + shake_x, y = star_y + shake_y - 2, w = 1, h = 5, color = 0xffffff66);
+            }
         }
         
-        // Moon (level-based appearance)
-        let moon_x = 320 + shake_x;
-        let moon_y = 40 + shake_y;
+        // Moon (positioned in upper right, properly sized)
+        let moon_x = 340 + shake_x;
+        let moon_y = 25 + shake_y;
+        // Moon glow (draw first, behind)
+        circ!(x = moon_x, y = moon_y, d = 45, color = 0xffff8811);
+        circ!(x = moon_x, y = moon_y, d = 38, color = 0xffff8822);
+        // Main moon
         let moon_color = if self.level >= 3 { 0xffddaaff } else { 0xfff8e0ff };
-        circ!(x = moon_x, y = moon_y, d = 25, color = moon_color);
-        circ!(x = moon_x + 4, y = moon_y - 2, d = 20, color = sky_color); // Crescent effect
+        circ!(x = moon_x, y = moon_y, d = 28, color = moon_color);
+        circ!(x = moon_x + 4, y = moon_y - 2, d = 22, color = sky_color); // Crescent shadow
         
         // Mountains (mid layer) - larger for bigger screen
         let mountain_offset = (self.scroll_x * 0.2) as i32 % 180;
@@ -789,22 +801,57 @@ impl GameState {
             }
         }
         
-        // Pine trees (foreground decoration) - scroll faster
-        let tree_offset = (self.scroll_x * 0.5) as i32 % 100;
-        for i in 0..6 {
-            let tx = i * 100 - tree_offset + shake_x + 30;
-            let ty = 155 + shake_y;
-            // Tree trunk
-            rect!(x = tx - 3, y = ty, w = 6, h = 15, color = 0x4a3020ff);
-            // Tree layers (triangular pine)
-            let tree_green = if self.level >= 3 { 0x1a3a2aff } else { 0x2a5a3aff };
-            for layer in 0..4 {
-                let lw = 20 - layer * 4;
-                let ly = ty - 10 - layer * 8;
-                rect!(x = tx - lw / 2, y = ly, w = lw as u32, h = 10, color = tree_green);
+        // Pine trees with VARIATION (3 different styles)
+        let tree_offset = (self.scroll_x * 0.5) as i32 % 120;
+        for i in 0..8 {
+            let tx = i * 70 - tree_offset + shake_x + 20;
+            let tree_style = i % 3; // 3 different tree styles
+            let size_mult = match i % 4 { 0 => 1.2, 1 => 0.8, 2 => 1.0, _ => 0.9 };
+            let ty = 155 + shake_y + if i % 2 == 0 { 0 } else { 5 }; // Slight Y variation
+            
+            let tree_green = if self.level >= 3 { 0x1a4a2aff } else { 0x2a6a3aff };
+            let tree_dark = if self.level >= 3 { 0x0f2a1aff } else { 0x1a4a2aff };
+            
+            match tree_style {
+                0 => {
+                    // Classic pine - tall and narrow
+                    let h = (50.0 * size_mult) as i32;
+                    rect!(x = tx - 3, y = ty, w = 6, h = 15, color = 0x5a3020ff);
+                    for layer in 0..6 {
+                        let lw = ((22 - layer * 3) as f32 * size_mult) as i32;
+                        let ly = ty - 5 - (layer as f32 * 8.0 * size_mult) as i32;
+                        rect!(x = tx - lw / 2, y = ly, w = lw as u32, h = 10, color = tree_green);
+                    }
+                    circ!(x = tx, y = ty - h, d = 8, color = 0xf8f8ffee);
+                }
+                1 => {
+                    // Bushy pine - wider and shorter
+                    rect!(x = tx - 4, y = ty, w = 8, h = 12, color = 0x5a3020ff);
+                    for layer in 0..4 {
+                        let lw = ((32 - layer * 6) as f32 * size_mult) as i32;
+                        let ly = ty - 4 - (layer as f32 * 10.0 * size_mult) as i32;
+                        rect!(x = tx - lw / 2, y = ly, w = lw as u32, h = 12, color = tree_green);
+                        rect!(x = tx - lw / 2 + 2, y = ly + 2, w = (lw - 4) as u32, h = 8, color = tree_dark);
+                    }
+                    // Snow patches
+                    ellipse!(x = tx - 8, y = ty - 10, w = 16, h = 4, color = 0xf8f8ffcc);
+                    ellipse!(x = tx + 4, y = ty - 25, w = 10, h = 3, color = 0xf8f8ffcc);
+                }
+                _ => {
+                    // Decorated pine - Christmas tree style
+                    rect!(x = tx - 3, y = ty, w = 6, h = 14, color = 0x5a3020ff);
+                    for layer in 0..5 {
+                        let lw = ((26 - layer * 4) as f32 * size_mult) as i32;
+                        let ly = ty - 6 - (layer as f32 * 9.0 * size_mult) as i32;
+                        rect!(x = tx - lw / 2, y = ly, w = lw as u32, h = 11, color = tree_green);
+                    }
+                    // Star on top
+                    circ!(x = tx, y = ty - 48, d = 6, color = COLOR_GOLD);
+                    // Snow
+                    circ!(x = tx, y = ty - 42, d = 8, color = 0xf8f8ffdd);
+                    rect!(x = tx - 10, y = ty - 8, w = 20, h = 3, color = 0xf8f8ffbb);
+                }
             }
-            // Snow on tree
-            circ!(x = tx, y = ty - 35, d = 8, color = 0xf8f8ffcc);
         }
         
         // Ground/snow layer - adjusted for larger screen
@@ -823,7 +870,16 @@ impl GameState {
     
     fn draw_snowflakes(&self) {
         for snow in &self.snowflakes {
-            circ!(x = snow.x as i32, y = snow.y as i32, d = snow.size, color = 0xffffffaa);
+            // Enhanced snowflake with multiple layers
+            let x = snow.x as i32;
+            let y = snow.y as i32;
+            let s = snow.size;
+            circ!(x = x, y = y, d = s + 1, color = 0xffffffcc);
+            if s > 1 {
+                // Add sparkle cross pattern for larger flakes
+                rect!(x = x - s as i32 / 2, y = y, w = s, h = 1, color = 0xffffffaa);
+                rect!(x = x, y = y - s as i32 / 2, w = 1, h = s, color = 0xffffffaa);
+            }
         }
     }
     
@@ -831,33 +887,126 @@ impl GameState {
         let cx = chimney.x as i32 + shake_x;
         let cy = chimney.y as i32 + shake_y;
         
-        // House base
-        rect!(x = cx - 20, y = cy + 10, w = 40, h = 30, color = 0x4a3728ff);
-        
-        // Roof
-        for row in 0..15 {
-            let width = 50 - row * 2;
-            rect!(x = cx - width / 2, y = cy + 10 - row, w = width as u32, h = 1, color = COLOR_ROOF);
+        match chimney.style {
+            0 => {
+                // STYLE 0: Cozy cottage (brown, warm)
+                // House base
+                rect!(x = cx - 25, y = cy + 10, w = 50, h = 35, color = 0x5a4030ff);
+                rect!(x = cx - 22, y = cy + 12, w = 44, h = 31, color = 0x6a5040ff);
+                
+                // Windows (lit, warm glow)
+                rect!(x = cx - 15, y = cy + 18, w = 10, h = 10, color = 0xffdd66ff);
+                rect!(x = cx + 5, y = cy + 18, w = 10, h = 10, color = 0xffdd66ff);
+                // Window frames
+                rect!(x = cx - 15, y = cy + 22, w = 10, h = 1, color = 0x3a2a20ff);
+                rect!(x = cx - 11, y = cy + 18, w = 1, h = 10, color = 0x3a2a20ff);
+                rect!(x = cx + 5, y = cy + 22, w = 10, h = 1, color = 0x3a2a20ff);
+                rect!(x = cx + 9, y = cy + 18, w = 1, h = 10, color = 0x3a2a20ff);
+                // Door
+                rect!(x = cx - 4, y = cy + 30, w = 8, h = 12, color = 0x4a3020ff);
+                circ!(x = cx + 2, y = cy + 36, d = 2, color = COLOR_GOLD);
+                
+                // Roof (red triangular)
+                for row in 0..20 {
+                    let width = 60 - row * 3;
+                    rect!(x = cx - width / 2, y = cy + 10 - row, w = width as u32, h = 1, color = 0x8b1a1aff);
+                }
+                // Snow on roof
+                for row in 0..4 {
+                    let width = 58 - row * 4;
+                    rect!(x = cx - width / 2, y = cy + 8 - row, w = width as u32, h = 1, color = 0xf8f8ffff);
+                }
+                
+                // Chimney
+                rect!(x = cx + 8, y = cy - 15, w = 14, h = 25, color = 0x8b4513ff);
+                rect!(x = cx + 6, y = cy - 17, w = 18, h = 4, color = 0x6b3a10ff);
+            }
+            1 => {
+                // STYLE 1: Tall cabin (green/blue, nordic)
+                // House base (taller)
+                rect!(x = cx - 22, y = cy + 5, w = 44, h = 40, color = 0x2a4a3aff);
+                rect!(x = cx - 19, y = cy + 7, w = 38, h = 36, color = 0x3a5a4aff);
+                
+                // Round window (attic)
+                circ!(x = cx, y = cy + 12, d = 10, color = 0xffee88ff);
+                circ!(x = cx, y = cy + 12, d = 6, color = 0xffdd66ff);
+                
+                // Windows (two small)
+                rect!(x = cx - 14, y = cy + 24, w = 8, h = 8, color = 0xffdd66ff);
+                rect!(x = cx + 6, y = cy + 24, w = 8, h = 8, color = 0xffdd66ff);
+                // Window crosses
+                rect!(x = cx - 11, y = cy + 24, w = 1, h = 8, color = 0x2a3a2aff);
+                rect!(x = cx + 9, y = cy + 24, w = 1, h = 8, color = 0x2a3a2aff);
+                
+                // Steep roof (blue/gray)
+                for row in 0..28 {
+                    let width = 54 - row * 2;
+                    rect!(x = cx - width / 2, y = cy + 5 - row, w = width as u32, h = 1, color = 0x4a5a6aff);
+                }
+                // Snow on roof
+                for row in 0..5 {
+                    let width = 52 - row * 3;
+                    rect!(x = cx - width / 2, y = cy + 3 - row, w = width as u32, h = 1, color = 0xf8f8ffff);
+                }
+                
+                // Chimney (stone)
+                rect!(x = cx + 10, y = cy - 28, w = 12, h = 30, color = 0x555555ff);
+                rect!(x = cx + 8, y = cy - 30, w = 16, h = 4, color = 0x444444ff);
+            }
+            _ => {
+                // STYLE 2: Wide mansion (gray stone, elegant)
+                // House base (wider)
+                rect!(x = cx - 35, y = cy + 8, w = 70, h = 38, color = 0x555566ff);
+                rect!(x = cx - 32, y = cy + 10, w = 64, h = 34, color = 0x666677ff);
+                
+                // Windows (three)
+                rect!(x = cx - 26, y = cy + 18, w = 12, h = 12, color = 0xffee88ff);
+                rect!(x = cx - 6, y = cy + 18, w = 12, h = 12, color = 0xffee88ff);
+                rect!(x = cx + 14, y = cy + 18, w = 12, h = 12, color = 0xffee88ff);
+                // Window shutters
+                rect!(x = cx - 28, y = cy + 18, w = 2, h = 12, color = 0x3a3a4aff);
+                rect!(x = cx - 14, y = cy + 18, w = 2, h = 12, color = 0x3a3a4aff);
+                rect!(x = cx - 8, y = cy + 18, w = 2, h = 12, color = 0x3a3a4aff);
+                rect!(x = cx + 6, y = cy + 18, w = 2, h = 12, color = 0x3a3a4aff);
+                rect!(x = cx + 12, y = cy + 18, w = 2, h = 12, color = 0x3a3a4aff);
+                rect!(x = cx + 26, y = cy + 18, w = 2, h = 12, color = 0x3a3a4aff);
+                
+                // Grand door
+                rect!(x = cx - 5, y = cy + 32, w = 10, h = 14, color = 0x4a3a2aff);
+                circ!(x = cx, y = cy + 35, d = 8, color = 0x5a4a3aff);
+                
+                // Flat roof with rim
+                rect!(x = cx - 38, y = cy + 5, w = 76, h = 5, color = 0x444455ff);
+                rect!(x = cx - 36, y = cy + 8, w = 72, h = 2, color = 0x555566ff);
+                // Snow on roof
+                rect!(x = cx - 36, y = cy + 4, w = 72, h = 3, color = 0xf8f8ffff);
+                
+                // Two chimneys
+                rect!(x = cx - 28, y = cy - 12, w = 10, h = 18, color = 0x555555ff);
+                rect!(x = cx - 30, y = cy - 14, w = 14, h = 4, color = 0x444444ff);
+                rect!(x = cx + 18, y = cy - 12, w = 10, h = 18, color = 0x555555ff);
+                rect!(x = cx + 16, y = cy - 14, w = 14, h = 4, color = 0x444444ff);
+            }
         }
         
-        // Snow on roof
-        rect!(x = cx - 22, y = cy + 8, w = 44, h = 3, color = 0xf0f8ffff);
+        // Chimney glow if not delivered (draw above house)
+        let chimney_x = match chimney.style {
+            0 => cx + 15,
+            1 => cx + 16,
+            _ => cx - 23, // Left chimney for mansion
+        };
+        let chimney_y = match chimney.style {
+            0 => cy - 12,
+            1 => cy - 25,
+            _ => cy - 10,
+        };
         
-        // Chimney
-        rect!(x = cx - 6, y = cy - 10, w = 12, h = 20, color = COLOR_CHIMNEY);
-        
-        // Chimney top
-        rect!(x = cx - 8, y = cy - 12, w = 16, h = 4, color = 0x5c3a21ff);
-        
-        // Chimney glow if not delivered
         if !chimney.delivered {
-            // Pulsing target indicator
             let pulse = ((self.frame as f32 / 8.0).sin() * 30.0) as u32;
             let glow_color = 0xffff0000 + (pulse << 24);
-            circ!(x = cx, y = cy - 8, d = 16 + (pulse / 10) as u32, color = glow_color);
+            circ!(x = chimney_x, y = chimney_y, d = 22 + (pulse / 8) as u32, color = glow_color);
         } else {
-            // Checkmark / delivered indicator
-            circ!(x = cx, y = cy - 8, d = 12, color = 0x00ff0088);
+            circ!(x = chimney_x, y = chimney_y, d = 18, color = 0x00ff0088);
         }
     }
     
@@ -873,41 +1022,110 @@ impl GameState {
         
         // Invincibility glow
         if self.invincible_timer > 0 {
-            circ!(x = x + 10, y = y + 4, d = 40, color = 0xffffff22);
+            circ!(x = x + 24, y = y + 4, d = 55, color = 0xffffff33);
         }
         
-        // Shadow (on ground at 78% of screen height)
+        // Shadow (on ground)
         let ground_y = (SCREEN_H * 0.78) as i32;
-        ellipse!(x = x + 8, y = ground_y + 5 + shake_y, w = 35, h = 8, color = 0x00000044);
+        ellipse!(x = x + 24, y = ground_y + 8 + shake_y, w = 55, h = 12, color = 0x00000044);
         
-        // Sleigh body (red with gold trim)
-        rect!(x = x - 4, y = y + tilt / 2, w = 28, h = 12, color = 0xcc0000ff);
-        rect!(x = x - 6, y = y + 10 + tilt / 2, w = 32, h = 4, color = COLOR_GOLD);
+        // Sleigh body (detailed with trim)
+        rect!(x = x - 4, y = y + tilt / 2, w = 34, h = 14, color = 0xcc0000ff);
+        rect!(x = x - 2, y = y + 2 + tilt / 2, w = 30, h = 10, color = 0xee2222ff);
+        rect!(x = x - 6, y = y + 12 + tilt / 2, w = 40, h = 5, color = COLOR_GOLD);
+        // Sleigh back rest
+        rect!(x = x - 6, y = y - 4 + tilt / 2, w = 4, h = 16, color = 0xcc0000ff);
         
-        // Runner
-        rect!(x = x - 8, y = y + 14 + tilt / 2, w = 36, h = 2, color = 0x333333ff);
+        // Runner (curved with detail)
+        rect!(x = x - 8, y = y + 17 + tilt / 2, w = 44, h = 3, color = 0x555555ff);
+        rect!(x = x - 10, y = y + 15 + tilt / 2, w = 4, h = 5, color = 0x555555ff);
+        // Runner curve detail
+        circ!(x = x - 8, y = y + 17 + tilt / 2, d = 4, color = 0x666666ff);
         
-        // Santa (simplified)
-        circ!(x = x + 6, y = y - 2 + tilt / 2, d = 12, color = 0xffdbacff); // Face
-        rect!(x = x, y = y - 8 + tilt / 2, w = 12, h = 8, color = 0xff0000ff); // Hat
-        circ!(x = x + 6, y = y - 10 + tilt / 2, d = 5, color = 0xffffffff); // Pom
+        // === SANTA (highly detailed) ===
+        // Body (red coat)
+        rect!(x = x + 2, y = y + tilt / 2, w = 16, h = 12, color = 0xdd0000ff);
+        rect!(x = x + 4, y = y + 2 + tilt / 2, w = 12, h = 8, color = 0xcc0000ff);
+        // White fur trim on coat
+        rect!(x = x + 2, y = y + 10 + tilt / 2, w = 16, h = 2, color = 0xffffffff);
         
-        // Reindeer silhouette
-        rect!(x = x + 30, y = y + 2 + tilt / 3, w = 16, h = 8, color = 0x8b4513cc);
-        circ!(x = x + 48, y = y + tilt / 3, d = 8, color = 0x8b4513cc);
-        // Red nose!
-        circ!(x = x + 52, y = y + tilt / 3, d = 4, color = 0xff0000ff);
+        // Face (detailed)
+        circ!(x = x + 10, y = y - 4 + tilt / 2, d = 14, color = 0xffdbacff); // Face
+        // Eyes
+        circ!(x = x + 7, y = y - 6 + tilt / 2, d = 3, color = 0x000000ff);  // Left eye
+        circ!(x = x + 13, y = y - 6 + tilt / 2, d = 3, color = 0x000000ff); // Right eye
+        // Eye highlights
+        circ!(x = x + 6, y = y - 7 + tilt / 2, d = 1, color = 0xffffffff);
+        circ!(x = x + 12, y = y - 7 + tilt / 2, d = 1, color = 0xffffffff);
+        // Rosy cheeks
+        circ!(x = x + 4, y = y - 3 + tilt / 2, d = 4, color = 0xffaaaa88);
+        circ!(x = x + 16, y = y - 3 + tilt / 2, d = 4, color = 0xffaaaa88);
+        // Nose
+        circ!(x = x + 10, y = y - 3 + tilt / 2, d = 4, color = 0xffccaaff);
+        // Smile
+        rect!(x = x + 7, y = y - 1 + tilt / 2, w = 6, h = 1, color = 0xcc8888ff);
+        
+        // White beard
+        circ!(x = x + 10, y = y + 4 + tilt / 2, d = 12, color = 0xffffffff);
+        circ!(x = x + 6, y = y + 2 + tilt / 2, d = 8, color = 0xffffffff);
+        circ!(x = x + 14, y = y + 2 + tilt / 2, d = 8, color = 0xffffffff);
+        // Beard point
+        rect!(x = x + 8, y = y + 8 + tilt / 2, w = 4, h = 4, color = 0xffffffff);
+        
+        // Hat (detailed)
+        rect!(x = x + 4, y = y - 12 + tilt / 2, w = 14, h = 10, color = 0xff0000ff);
+        rect!(x = x + 12, y = y - 16 + tilt / 2, w = 8, h = 6, color = 0xff0000ff); // Hat tip bent
+        circ!(x = x + 18, y = y - 14 + tilt / 2, d = 6, color = 0xffffffff); // Pom
+        // Hat band (white fur)
+        rect!(x = x + 4, y = y - 4 + tilt / 2, w = 14, h = 3, color = 0xffffffff);
+        
+        // Arms (holding reins)
+        rect!(x = x + 18, y = y + 2 + tilt / 2, w = 12, h = 4, color = 0xdd0000ff); // Arm
+        circ!(x = x + 28, y = y + 4 + tilt / 2, d = 5, color = 0xffdbacff); // Hand
+        // Reins
+        rect!(x = x + 28, y = y + 4 + tilt / 3, w = 12, h = 1, color = 0x8b4513ff);
+        
+        // === REINDEER (detailed) ===
+        // Body
+        rect!(x = x + 40, y = y + 2 + tilt / 3, w = 22, h = 12, color = 0x8b4513ff);
+        rect!(x = x + 42, y = y + 4 + tilt / 3, w = 18, h = 8, color = 0x9b5523ff);
+        // Head
+        circ!(x = x + 64, y = y + 2 + tilt / 3, d = 12, color = 0x8b4513ff);
+        // Snout
+        ellipse!(x = x + 68, y = y + 4 + tilt / 3, w = 8, h = 6, color = 0x9b5523ff);
+        // Ears
+        circ!(x = x + 58, y = y - 4 + tilt / 3, d = 5, color = 0x8b4513ff);
+        circ!(x = x + 66, y = y - 4 + tilt / 3, d = 5, color = 0x8b4513ff);
+        // Antlers (branched)
+        rect!(x = x + 56, y = y - 12 + tilt / 3, w = 2, h = 10, color = 0x5a3010ff);
+        rect!(x = x + 54, y = y - 14 + tilt / 3, w = 6, h = 2, color = 0x5a3010ff);
+        rect!(x = x + 64, y = y - 12 + tilt / 3, w = 2, h = 10, color = 0x5a3010ff);
+        rect!(x = x + 62, y = y - 14 + tilt / 3, w = 6, h = 2, color = 0x5a3010ff);
+        // Eye
+        circ!(x = x + 62, y = y + 1 + tilt / 3, d = 3, color = 0x000000ff);
+        // RED NOSE (glowing!)
+        circ!(x = x + 72, y = y + 4 + tilt / 3, d = 6, color = 0xff0000ff);
+        circ!(x = x + 72, y = y + 4 + tilt / 3, d = 10, color = 0xff000033); // Glow
+        // Legs
+        rect!(x = x + 44, y = y + 12 + tilt / 3, w = 3, h = 7, color = 0x6a3010ff);
+        rect!(x = x + 52, y = y + 12 + tilt / 3, w = 3, h = 7, color = 0x6a3010ff);
+        // Tail
+        circ!(x = x + 38, y = y + 4 + tilt / 3, d = 4, color = 0x8b4513ff);
     }
     
     fn draw_falling_gift(&self, gift: &FallingGift, shake_x: i32, shake_y: i32) {
         let x = gift.x as i32 + shake_x;
         let y = gift.y as i32 + shake_y;
         
-        // Gift box
-        rect!(x = x - 5, y = y - 5, w = 10, h = 10, color = COLOR_GIFT);
+        // Gift box with ribbon (detailed)
+        rect!(x = x - 7, y = y - 7, w = 14, h = 14, color = 0xff0000ff);
+        rect!(x = x - 6, y = y - 6, w = 12, h = 12, color = 0xcc0000ff);
         // Ribbon
-        rect!(x = x - 1, y = y - 5, w = 2, h = 10, color = COLOR_GOLD);
-        rect!(x = x - 5, y = y - 1, w = 10, h = 2, color = COLOR_GOLD);
+        rect!(x = x - 1, y = y - 7, w = 3, h = 14, color = COLOR_GOLD);
+        rect!(x = x - 7, y = y - 1, w = 14, h = 3, color = COLOR_GOLD);
+        // Bow
+        circ!(x = x - 2, y = y - 5, d = 4, color = COLOR_GOLD);
+        circ!(x = x + 2, y = y - 5, d = 4, color = COLOR_GOLD);
     }
     
     fn draw_krampus(&self, shake_x: i32, shake_y: i32) {
@@ -918,89 +1136,98 @@ impl GameState {
         let shake = ((self.frame as f32 / 2.0).sin() * 3.0) as i32;
         let wing_flap = ((self.frame as f32 / 5.0).sin() * 8.0) as i32;
         
-        // Ominous red aura
+        // Ominous red aura (pulsing)
         let aura_pulse = ((self.frame as f32 / 8.0).sin() * 20.0) as u32;
-        circ!(x = x, y = y, d = 50 + aura_pulse, color = 0x44000022);
-        circ!(x = x, y = y, d = 40 + aura_pulse, color = 0x66000033);
+        circ!(x = x, y = y, d = 70 + aura_pulse, color = 0x44000022);
+        circ!(x = x, y = y, d = 55 + aura_pulse, color = 0x66000033);
         
         // Wings/cape (flapping)
-        rect!(x = x + 10, y = y - 15 + wing_flap / 2, w = 20, h = 25, color = 0x1a0a0aff);
-        rect!(x = x + 5, y = y - 10 - wing_flap / 2, w = 25, h = 20, color = 0x1a0a0aff);
+        rect!(x = x + 12, y = y - 18 + wing_flap / 2, w = 25, h = 30, color = 0x1a0a0aff);
+        rect!(x = x + 6, y = y - 12 - wing_flap / 2, w = 28, h = 24, color = 0x1a0a0aff);
         
         // Body (larger, more menacing)
-        rect!(x = x - 14 + shake, y = y - 10, w = 28, h = 24, color = 0x2a1a1aff);
+        rect!(x = x - 16 + shake, y = y - 12, w = 32, h = 28, color = 0x2a1a1aff);
+        rect!(x = x - 14 + shake, y = y - 10, w = 28, h = 24, color = 0x3a2020ff);
         
         // Fur texture lines
-        for i in 0..4 {
-            rect!(x = x - 10 + i * 6 + shake, y = y - 8 + (i % 2) * 4, w = 2, h = 18, color = 0x3a2a2aff);
+        for i in 0..5 {
+            rect!(x = x - 12 + i * 6 + shake, y = y - 8 + (i % 2) * 4, w = 2, h = 20, color = 0x4a2a2aff);
         }
         
         // Head
-        circ!(x = x + shake, y = y - 14, d = 18, color = 0x3a2020ff);
+        circ!(x = x + shake, y = y - 16, d = 22, color = 0x3a2020ff);
         
         // Horns (larger, curved look)
-        rect!(x = x - 14 + shake, y = y - 30, w = 5, h = 18, color = 0x4a3030ff);
-        rect!(x = x - 16 + shake, y = y - 32, w = 5, h = 6, color = 0x5a4040ff);
-        rect!(x = x + 9 + shake, y = y - 30, w = 5, h = 18, color = 0x4a3030ff);
-        rect!(x = x + 11 + shake, y = y - 32, w = 5, h = 6, color = 0x5a4040ff);
+        rect!(x = x - 16 + shake, y = y - 36, w = 6, h = 22, color = 0x4a3030ff);
+        rect!(x = x - 18 + shake, y = y - 38, w = 6, h = 8, color = 0x5a4040ff);
+        rect!(x = x + 10 + shake, y = y - 36, w = 6, h = 22, color = 0x4a3030ff);
+        rect!(x = x + 12 + shake, y = y - 38, w = 6, h = 8, color = 0x5a4040ff);
         
         // Glowing eyes (intense)
         let eye_glow = ((self.frame as f32 / 3.0).sin() * 60.0).abs() as u32;
-        circ!(x = x - 5 + shake, y = y - 16, d = 6, color = 0xff0000ff);
-        circ!(x = x + 5 + shake, y = y - 16, d = 6, color = 0xff0000ff);
-        // Eye glow halos
-        circ!(x = x - 5 + shake, y = y - 16, d = 10, color = 0xff000044 + (eye_glow << 24));
-        circ!(x = x + 5 + shake, y = y - 16, d = 10, color = 0xff000044 + (eye_glow << 24));
+        circ!(x = x - 6 + shake, y = y - 18, d = 8, color = 0xff0000ff);
+        circ!(x = x + 6 + shake, y = y - 18, d = 8, color = 0xff0000ff);
+        circ!(x = x - 6 + shake, y = y - 18, d = 12, color = 0xff000044 + (eye_glow << 24));
+        circ!(x = x + 6 + shake, y = y - 18, d = 12, color = 0xff000044 + (eye_glow << 24));
         
-        // Menacing grin
-        rect!(x = x - 6 + shake, y = y - 8, w = 12, h = 3, color = 0x000000ff);
-        // Teeth
-        for i in 0..4 {
-            rect!(x = x - 5 + i * 3 + shake, y = y - 8, w = 2, h = 2, color = 0xffffffcc);
+        // Menacing grin with fangs
+        rect!(x = x - 8 + shake, y = y - 8, w = 16, h = 4, color = 0x000000ff);
+        for i in 0..5 {
+            rect!(x = x - 7 + i * 3 + shake, y = y - 9, w = 2, h = 3, color = 0xffffffee);
         }
         
         // Chains (swinging)
         let chain_swing = ((self.frame as f32 / 8.0).sin() * 4.0) as i32;
-        for i in 0..4 {
-            let cx = x - 20 - i * 5 + chain_swing;
-            let cy = y + 10 + i * 3;
-            circ!(x = cx, y = cy, d = 4, color = 0x555555ff);
+        for i in 0..5 {
+            let cx = x - 25 - i * 5 + chain_swing;
+            let cy = y + 12 + i * 4;
+            circ!(x = cx, y = cy, d = 5, color = 0x666666ff);
         }
         
         // Claws
-        rect!(x = x - 18 + shake, y = y + 8, w = 6, h = 8, color = 0x1a0a0aff);
-        rect!(x = x + 12 + shake, y = y + 8, w = 6, h = 8, color = 0x1a0a0aff);
+        rect!(x = x - 22 + shake, y = y + 10, w = 8, h = 10, color = 0x1a0a0aff);
+        rect!(x = x + 14 + shake, y = y + 10, w = 8, h = 10, color = 0x1a0a0aff);
     }
     
     fn draw_projectile(&self, proj: &Projectile, shake_x: i32, shake_y: i32) {
         let x = proj.x as i32 + shake_x;
         let y = proj.y as i32 + shake_y;
         
-        // Flame trail
-        let trail_len = 3;
-        for i in 1..=trail_len {
-            let trail_x = x + (proj.vel_x * i as f32 * 2.0) as i32;
-            let trail_y = y + (proj.vel_y * i as f32 * 2.0) as i32;
-            let alpha = (0x88 - i * 0x20) as u32;
-            circ!(x = trail_x, y = trail_y, d = 6 - i as u32, color = 0xff330000 + alpha);
+        // Flame trail (glow circles)
+        for i in 1..=4i32 {
+            let trail_x = x + (proj.vel_x * i as f32 * 2.5) as i32;
+            let trail_y = y + (proj.vel_y * i as f32 * 2.5) as i32;
+            let alpha = 0x88 - i as u32 * 0x18;
+            circ!(x = trail_x, y = trail_y, d = (12 - i * 2) as u32, color = 0xff440000 + alpha);
         }
         
-        // Core fireball with glow
-        circ!(x = x, y = y, d = 12, color = 0x44000044); // Outer glow
-        circ!(x = x, y = y, d = 8, color = 0x880000ff);  // Dark core
-        circ!(x = x, y = y, d = 6, color = 0xff2200ff);  // Fire
-        circ!(x = x, y = y, d = 3, color = 0xffcc00ff);  // Hot center
+        // Core fireball with glow layers
+        circ!(x = x, y = y, d = 16, color = 0x44000044); // Outer glow
+        circ!(x = x, y = y, d = 12, color = 0x880000ff); // Dark core
+        circ!(x = x, y = y, d = 9, color = 0xff2200ff);  // Fire
+        circ!(x = x, y = y, d = 5, color = 0xffcc00ff);  // Hot center
     }
     
     fn draw_ui(&self, shake_x: i32, shake_y: i32) {
-        // Health hearts
+        // Health hearts (detailed)
         for i in 0..3 {
-            let hx = 8 + i * 14 + shake_x as u32;
-            let color = if i < self.health { 0xff0000ff } else { 0x333333ff };
-            // Simple heart shape
-            circ!(x = hx as i32, y = 10 + shake_y, d = 8, color = color);
-            circ!(x = hx as i32 + 6, y = 10 + shake_y, d = 8, color = color);
-            rect!(x = hx as i32 - 4, y = 10 + shake_y, w = 14, h = 6, color = color);
+            let hx = 12 + i * 22 + shake_x as u32;
+            let hy = 12 + shake_y;
+            let color = if i < self.health { 0xff0000ff } else { 0x444444ff };
+            let highlight = if i < self.health { 0xff6666ff } else { 0x555555ff };
+            // Heart shape
+            circ!(x = hx as i32 - 3, y = hy, d = 10, color = color);
+            circ!(x = hx as i32 + 3, y = hy, d = 10, color = color);
+            rect!(x = hx as i32 - 8, y = hy, w = 16, h = 8, color = color);
+            // Point of heart
+            for row in 0..6 {
+                let w = 16 - row * 3;
+                if w > 0 {
+                    rect!(x = hx as i32 - w as i32 / 2, y = hy + 6 + row, w = w as u32, h = 1, color = color);
+                }
+            }
+            // Highlight
+            circ!(x = hx as i32 - 4, y = hy - 2, d = 4, color = highlight);
         }
         
         // Score
