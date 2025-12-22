@@ -107,21 +107,29 @@ const MODE_DELIVERING: u8 = 1;
 const MODE_KRAMPUS: u8 = 2;
 const MODE_GAMEOVER: u8 = 3;
 
-// Screen dimensions
-const SCREEN_W: f32 = 256.0;
-const SCREEN_H: f32 = 144.0;
+// Screen dimensions (larger for better resolution)
+const SCREEN_W: f32 = 384.0;
+const SCREEN_H: f32 = 216.0;
 
 // Player constants
-const PLAYER_X: f32 = 40.0;  // Fixed X position
-const PLAYER_SPEED: f32 = 2.5;
+const PLAYER_X: f32 = 60.0;  // Fixed X position (adjusted for larger screen)
+const PLAYER_SPEED: f32 = 3.0;
 
-// Colors
-const COLOR_SKY: u32 = 0x1a2744ff;
+// Base colors
 const COLOR_SNOW: u32 = 0xf0f8ffff;
 const COLOR_CHIMNEY: u32 = 0x8b4513ff;
 const COLOR_ROOF: u32 = 0xfffffaff;
 const COLOR_GIFT: u32 = 0xff0000ff;
 const COLOR_GOLD: u32 = 0xffd700ff;
+
+// Level-based sky colors (environment changes)
+const SKY_COLORS: [u32; 5] = [
+    0x1a2744ff,  // Level 1: Deep night
+    0x0f1f3aff,  // Level 2: Darker midnight
+    0x2a1a44ff,  // Level 3: Purple twilight
+    0x0a1020ff,  // Level 4: Near black
+    0x1a0a2aff,  // Level 5+: Dark purple
+];
 
 impl GameState {
     pub fn new() -> Self {
@@ -144,7 +152,7 @@ impl GameState {
             krampus_x: SCREEN_W + 50.0,
             krampus_y: SCREEN_H / 2.0,
             krampus_active: false,
-            krampus_attack_timer: 600, // 10 seconds at 60fps
+            krampus_attack_timer: 1200, // 20 seconds before first Krampus
             krampus_duration: 0,
             projectiles: vec![],
             krampus_warning: 0,
@@ -188,16 +196,71 @@ impl GameState {
     }
     
     // ========================================================================
+    // AUDIO SYSTEM
+    // ========================================================================
+    
+    /// Play background music based on current game mode
+    fn play_mode_music(&self) {
+        // Stop all music tracks first
+        audio::stop("title_music");
+        audio::stop("game_music");
+        audio::stop("krampus_music");
+        audio::stop("gameover_music");
+        
+        // Play appropriate track for current mode
+        match self.mode {
+            MODE_TITLE => audio::play("title_music"),
+            MODE_DELIVERING => audio::play("game_music"),
+            MODE_KRAMPUS => audio::play("krampus_music"),
+            MODE_GAMEOVER => audio::play("gameover_music"),
+            _ => {}
+        }
+    }
+    
+    /// Keep music looping (call every frame)
+    fn update_music(&self) {
+        match self.mode {
+            MODE_TITLE => {
+                if !audio::is_playing("title_music") {
+                    audio::play("title_music");
+                }
+            }
+            MODE_DELIVERING => {
+                if !audio::is_playing("game_music") {
+                    audio::play("game_music");
+                }
+            }
+            MODE_KRAMPUS => {
+                if !audio::is_playing("krampus_music") {
+                    audio::play("krampus_music");
+                }
+            }
+            MODE_GAMEOVER => {
+                if !audio::is_playing("gameover_music") {
+                    audio::play("gameover_music");
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    /// Play a one-shot sound effect
+    fn play_sfx(name: &str) {
+        audio::play(name);
+    }
+    
+    // ========================================================================
     // INITIALIZATION
     // ========================================================================
     
     fn init_snowflakes(&mut self) {
         self.snowflakes.clear();
-        for _ in 0..25 {
+        // More snowflakes for larger screen
+        for _ in 0..50 {
             let x = self.random_range(0.0, SCREEN_W);
             let y = self.random_range(0.0, SCREEN_H);
-            let speed = self.random_range(0.5, 1.5);
-            let size = (self.random() % 2 + 1) as u32;
+            let speed = self.random_range(0.5, 1.8);
+            let size = (self.random() % 3 + 1) as u32;
             self.snowflakes.push(Snowflake { x, y, speed, size });
         }
     }
@@ -216,7 +279,7 @@ impl GameState {
         self.projectiles.clear();
         
         self.krampus_active = false;
-        self.krampus_attack_timer = 600;
+        self.krampus_attack_timer = 1200; // 20 seconds before first Krampus
         self.krampus_warning = 0;
         self.krampus_duration = 0;
         
@@ -275,15 +338,17 @@ impl GameState {
     // ========================================================================
     
     fn spawn_chimney(&mut self) {
-        let y = self.random_range(SCREEN_H * 0.5, SCREEN_H - 20.0);
+        // Spawn chimneys on the ground (78% of screen height)
+        let ground_y = SCREEN_H * 0.78;
+        let y = self.random_range(ground_y - 30.0, ground_y - 10.0);
         self.chimneys.push(Chimney {
-            x: SCREEN_W + 20.0,
+            x: SCREEN_W + 40.0,
             y,
             delivered: false,
         });
         
-        // Next chimney spawn distance (varies)
-        self.next_chimney_spawn = self.random_range(80.0, 150.0);
+        // Next chimney spawn distance (varies, more space for larger screen)
+        self.next_chimney_spawn = self.random_range(120.0, 200.0);
     }
     
     fn update_chimneys(&mut self) {
@@ -648,33 +713,85 @@ impl GameState {
     // ========================================================================
     
     fn draw_background(&self, shake_x: i32, shake_y: i32) {
-        // Sky gradient (simple)
-        clear(COLOR_SKY);
+        // Level-based sky color
+        let sky_idx = ((self.level - 1) as usize).min(4);
+        let sky_color = SKY_COLORS[sky_idx];
+        clear(sky_color);
         
-        // Stars (far layer)
-        for i in 0..15 {
-            let star_x = ((i * 37 + 10) as f32 - (self.scroll_x * 0.1) % SCREEN_W) as i32;
-            let star_y = (i * 7 % 50 + 5) as i32;
-            circ!(x = star_x + shake_x, y = star_y + shake_y, d = 2, color = 0xffffff88);
-        }
-        
-        // Mountains (mid layer)
-        let mountain_offset = (self.scroll_x * 0.3) as i32 % 120;
-        for i in 0..4 {
-            let mx = i * 120 - mountain_offset + shake_x;
-            let my = 80 + shake_y;
-            // Simple triangle mountain
-            for row in 0..40 {
-                let width = row * 3;
-                rect!(x = mx + 60 - width / 2, y = my + row, w = width as u32, h = 1, color = 0x2a3f5fff);
+        // Aurora effect at higher levels (level 3+)
+        if self.level >= 3 {
+            let aurora_offset = (self.frame as f32 / 30.0).sin() * 20.0;
+            for i in 0..5u32 {
+                let ay = 30 + i as i32 * 8 + aurora_offset as i32;
+                let alpha = 0x22u32 - i * 0x04;
+                let color = if self.level >= 4 { 0x8800ff00 + alpha } else { 0x00ff8800 + alpha };
+                rect!(x = 0, y = ay, w = SCREEN_W as u32, h = 6, color = color);
             }
         }
         
-        // Ground/snow layer
-        rect!(x = shake_x, y = 120 + shake_y, w = 256, h = 30, color = COLOR_SNOW);
+        // Stars (far layer) - more stars for larger screen
+        for i in 0..30 {
+            let star_x = ((i * 47 + 10) as f32 - (self.scroll_x * 0.1) % SCREEN_W) as i32;
+            let star_y = (i * 7 % 80 + 5) as i32;
+            let twinkle = if (self.frame + i * 17) % 60 < 30 { 0xffffffff } else { 0xffffff88 };
+            circ!(x = star_x + shake_x, y = star_y + shake_y, d = 2, color = twinkle);
+        }
         
-        // Ground line
-        rect!(x = shake_x, y = 119 + shake_y, w = 256, h = 2, color = 0xc0d0e0ff);
+        // Moon (level-based appearance)
+        let moon_x = 320 + shake_x;
+        let moon_y = 40 + shake_y;
+        let moon_color = if self.level >= 3 { 0xffddaaff } else { 0xfff8e0ff };
+        circ!(x = moon_x, y = moon_y, d = 25, color = moon_color);
+        circ!(x = moon_x + 4, y = moon_y - 2, d = 20, color = sky_color); // Crescent effect
+        
+        // Mountains (mid layer) - larger for bigger screen
+        let mountain_offset = (self.scroll_x * 0.2) as i32 % 180;
+        for i in 0..4 {
+            let mx = i * 180 - mountain_offset + shake_x;
+            let my = 110 + shake_y;
+            // Larger mountains
+            let mountain_color = if self.level >= 4 { 0x1a2040ff } else { 0x2a3f5fff };
+            for row in 0..60 {
+                let width = row * 4;
+                rect!(x = mx + 90 - width / 2, y = my + row, w = width as u32, h = 1, color = mountain_color);
+            }
+            // Snow cap
+            for row in 0..15 {
+                let width = row * 2;
+                rect!(x = mx + 90 - width / 2, y = my + row, w = width as u32, h = 1, color = 0xddddddff);
+            }
+        }
+        
+        // Pine trees (foreground decoration) - scroll faster
+        let tree_offset = (self.scroll_x * 0.5) as i32 % 100;
+        for i in 0..6 {
+            let tx = i * 100 - tree_offset + shake_x + 30;
+            let ty = 155 + shake_y;
+            // Tree trunk
+            rect!(x = tx - 3, y = ty, w = 6, h = 15, color = 0x4a3020ff);
+            // Tree layers (triangular pine)
+            let tree_green = if self.level >= 3 { 0x1a3a2aff } else { 0x2a5a3aff };
+            for layer in 0..4 {
+                let lw = 20 - layer * 4;
+                let ly = ty - 10 - layer * 8;
+                rect!(x = tx - lw / 2, y = ly, w = lw as u32, h = 10, color = tree_green);
+            }
+            // Snow on tree
+            circ!(x = tx, y = ty - 35, d = 8, color = 0xf8f8ffcc);
+        }
+        
+        // Ground/snow layer - adjusted for larger screen
+        let ground_y = (SCREEN_H * 0.78) as i32;
+        rect!(x = shake_x, y = ground_y + shake_y, w = SCREEN_W as u32, h = 50, color = COLOR_SNOW);
+        
+        // Ground line with subtle shadow
+        rect!(x = shake_x, y = ground_y - 1 + shake_y, w = SCREEN_W as u32, h = 2, color = 0xc0d0e0ff);
+        
+        // Snow mounds (decorative)
+        for i in 0..8 {
+            let mound_x = (i * 60 + 20) as i32 - ((self.scroll_x * 0.4) as i32 % 60) + shake_x;
+            ellipse!(x = mound_x, y = ground_y + 10 + shake_y, w = 30 + (i % 3) as u32 * 10, h = 10, color = 0xf8f8ffff);
+        }
     }
     
     fn draw_snowflakes(&self) {
@@ -732,8 +849,9 @@ impl GameState {
             circ!(x = x + 10, y = y + 4, d = 40, color = 0xffffff22);
         }
         
-        // Shadow
-        ellipse!(x = x + 8, y = 125 + shake_y, w = 30, h = 6, color = 0x00000044);
+        // Shadow (on ground at 78% of screen height)
+        let ground_y = (SCREEN_H * 0.78) as i32;
+        ellipse!(x = x + 8, y = ground_y + 5 + shake_y, w = 35, h = 8, color = 0x00000044);
         
         // Sleigh body (red with gold trim)
         rect!(x = x - 4, y = y + tilt / 2, w = 28, h = 12, color = 0xcc0000ff);
@@ -942,19 +1060,19 @@ impl GameState {
     
     /// Button hints for title screen
     fn draw_controls_hint(&self) {
-        // Control box
-        rect!(x = 8, y = 115, w = 120, h = 24, color = 0x00000088);
+        // Control box (centered at bottom for larger screen)
+        rect!(x = 120, y = 185, w = 145, h = 26, color = 0x00000088);
         
         // Arrow keys hint
-        rect!(x = 12, y = 120, w = 8, h = 14, color = 0x444444ff);
-        text!("^", x = 13, y = 118, font = "small", color = 0x00ff00ff);
-        text!("v", x = 13, y = 128, font = "small", color = 0x00ff00ff);
-        text!("Move", x = 24, y = 123, font = "small", color = 0xccccccff);
+        rect!(x = 125, y = 190, w = 10, h = 16, color = 0x444444ff);
+        text!("^", x = 127, y = 188, font = "small", color = 0x00ff00ff);
+        text!("v", x = 127, y = 198, font = "small", color = 0x00ff00ff);
+        text!("Move", x = 140, y = 194, font = "small", color = 0xccccccff);
         
         // Enter key hint
-        rect!(x = 60, y = 120, w = 40, h = 14, color = 0x00aa00ff);
-        text!("ENTER", x = 64, y = 123, font = "small", color = 0xffffffff);
-        text!("Drop", x = 104, y = 123, font = "small", color = 0xccccccff);
+        rect!(x = 180, y = 190, w = 45, h = 16, color = 0x00aa00ff);
+        text!("ENTER", x = 185, y = 194, font = "small", color = 0xffffffff);
+        text!("Drop", x = 230, y = 194, font = "small", color = 0xccccccff);
     }
     
     // ========================================================================
@@ -981,32 +1099,48 @@ impl GameState {
                 self.draw_background(0, 0);
                 self.draw_snowflakes();
                 
-                // Title
-                text!("SANTA", x = 88, y = 30, font = "large", color = 0xff0000ff);
-                text!("DELIVERY", x = 72, y = 50, font = "large", color = 0x00aa00ff);
+                // Title background panel
+                rect!(x = 100, y = 40, w = 184, h = 60, color = 0x00000088);
                 
-                // Sleigh preview
-                let preview_y = 80.0 + (self.frame as f32 / 20.0).sin() * 5.0;
+                // Title (centered for 384 width)
+                text!("SANTA", x = 140, y = 50, font = "large", color = 0xff0000ff);
+                text!("DELIVERY", x = 124, y = 75, font = "large", color = 0x00aa00ff);
+                
+                // Sleigh preview (centered)
+                let preview_y = 120.0 + (self.frame as f32 / 20.0).sin() * 8.0;
                 let old_y = self.player_y;
                 self.player_y = preview_y;
-                self.draw_sleigh(0, 0);
+                self.draw_sleigh(100, 0); // Offset to center
                 self.player_y = old_y;
                 
                 // Instructions
                 if (self.frame / 30) % 2 == 0 {
-                    text!("Press START to Fly!", x = 64, y = 100, font = "medium", color = 0xffffffff);
+                    text!("Press ENTER or START to Fly!", x = 100, y = 155, font = "medium", color = 0xffffffff);
                 }
                 
                 // Button hints
                 self.draw_controls_hint();
                 
+                // High score
                 if self.high_score > 0 {
-                    text!("Best: {}", self.high_score; x = 100, y = 138, font = "small", color = COLOR_GOLD);
+                    text!("Best: {}", self.high_score; x = 160, y = 180, font = "small", color = COLOR_GOLD);
                 }
                 
+                // Exit hint
+                text!("ESC to Exit", x = 320, y = 200, font = "small", color = 0x666666ff);
+                
+                // Input handling
                 let gp = gamepad::get(0);
-                if gp.start.just_pressed() || gp.a.just_pressed() {
+                let kb = keyboard::get();
+                
+                if gp.start.just_pressed() || gp.a.just_pressed() || kb.enter().just_pressed() {
                     self.start_game();
+                }
+                
+                // Exit game with ESC (note: in browser this may just unfocus)
+                if kb.escape().just_pressed() {
+                    // In Turbo, we can't truly exit, but we can show a message
+                    // For now, we'll just acknowledge it
                 }
             }
             
@@ -1133,7 +1267,7 @@ impl GameState {
         if self.screen_flash > 0 {
             let alpha = ((self.screen_flash as f32 / 15.0) * 180.0) as u32;
             let flash = (self.flash_color & 0xffffff00) | alpha;
-            rect!(x = 0, y = 0, w = 256, h = 144, color = flash);
+            rect!(x = 0, y = 0, w = SCREEN_W as u32, h = SCREEN_H as u32, color = flash);
         }
     }
 }
