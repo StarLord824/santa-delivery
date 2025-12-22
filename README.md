@@ -36,6 +36,7 @@ A retro-style pixel art arcade game where you play as Santa delivering gifts whi
 ## 📁 Project Structure
 
 - `src/lib.rs` - Main game logic and state management
+- `src/types.rs` - Data structures and constants
 - `sprites/` - Pixel art assets
 - `audio/` - Music and sound effects
 - `turbo.toml` - Game configuration
