@@ -1,39 +1,44 @@
 use turbo::*;
 
 // ============================================================================
-// SNOWFLAKE PARTICLE
+// STRUCTS
 // ============================================================================
 
+/// A chimney target where Santa needs to drop gifts
+#[turbo::serialize]
+struct Chimney {
+    x: f32,        // World X position (scrolls left)
+    y: f32,        // Fixed Y position (height)
+    delivered: bool,
+}
+
+/// A gift that's been dropped and is falling
+#[turbo::serialize]
+struct FallingGift {
+    x: f32,
+    y: f32,
+    vel_y: f32,    // Falling velocity
+    target_chimney: usize, // Which chimney this is aimed at
+    active: bool,
+}
+
+/// Krampus projectile
+#[turbo::serialize]
+struct Projectile {
+    x: f32,
+    y: f32,
+    vel_x: f32,
+    vel_y: f32,
+    active: bool,
+}
+
+/// Snowflake for atmosphere
 #[turbo::serialize]
 struct Snowflake {
     x: f32,
     y: f32,
     speed: f32,
     size: u32,
-    drift: f32,
-}
-
-// ============================================================================
-// SCORE POPUP (for juice!)
-// ============================================================================
-
-#[turbo::serialize]
-struct ScorePopup {
-    x: f32,
-    y: f32,
-    value: u32,
-    life: u32,
-}
-
-// ============================================================================
-// GIFT STRUCTURE
-// ============================================================================
-
-#[turbo::serialize]
-struct Gift {
-    x: f32,
-    y: f32,
-    collected: bool,
 }
 
 // ============================================================================
@@ -43,67 +48,80 @@ struct Gift {
 #[turbo::game]
 struct GameState {
     frame: u32,
-    mode: u8,  // 0=Title, 1=Jingle, 2=Hurry, 3=Krampus, 4=GameOver
+    mode: u8,  // 0=Title, 1=Delivering, 2=KrampusAttack, 3=GameOver
     
-    // Timers (in seconds)
-    jingle_timer: i32,
-    hurry_timer: i32,
-    krampus_timer: i32,
+    // Scrolling
+    scroll_x: f32,
+    scroll_speed: f32,
     
-    // Player
-    player_x: f32,
+    // Player (Santa's sleigh)
     player_y: f32,
-    speed: f32,
+    player_vel_y: f32,
+    sleigh_tilt: f32,  // Visual tilt when moving
+    
+    // Chimneys (delivery targets)
+    chimneys: Vec<Chimney>,
+    next_chimney_spawn: f32,
+    
+    // Falling gifts
+    gifts: Vec<FallingGift>,
     
     // Krampus
     krampus_x: f32,
     krampus_y: f32,
-    krampus_speed: f32,
+    krampus_active: bool,
+    krampus_attack_timer: u32,
+    krampus_duration: u32,
+    projectiles: Vec<Projectile>,
+    krampus_warning: u32,  // Countdown before attack
     
-    // Traps (fixed size array)
-    trap_x: [f32; 5],
-    trap_y: [f32; 5],
-    trap_count: u32,
-    
-    // Gifts
-    gifts: Vec<Gift>,
-    
-    // Scoring & Progression
+    // Stats
+    health: u32,
     score: u32,
     high_score: u32,
-    round: u32,
-    gifts_collected_this_round: u32,
+    deliveries: u32,
+    naughty_meter: u32,
+    level: u32,
     
     // Visual effects
     screen_flash: u32,
     flash_color: u32,
     screen_shake: u32,
+    invincible_timer: u32,  // Invincibility frames after damage
     
     // Particles
     snowflakes: Vec<Snowflake>,
-    score_popups: Vec<ScorePopup>,
     
-    // Random seed (simple LCG)
+    // Tutorial
+    tutorial_timer: u32,   // Counts down during tutorial
+    first_play: bool,      // True if this is first game
+    tutorial_step: u8,     // Which hint to show
+    
+    // RNG
     rng_seed: u32,
 }
 
 // Game mode constants
 const MODE_TITLE: u8 = 0;
-const MODE_JINGLE: u8 = 1;
-const MODE_HURRY: u8 = 2;
-const MODE_KRAMPUS: u8 = 3;
-const MODE_GAMEOVER: u8 = 4;
+const MODE_DELIVERING: u8 = 1;
+const MODE_KRAMPUS: u8 = 2;
+const MODE_GAMEOVER: u8 = 3;
 
-// Color palettes for each mode
-const COLOR_JINGLE_BG: u32 = 0x1a4a5aff;      // Deep teal
-const COLOR_HURRY_BG: u32 = 0x8b4513ff;       // Saddle brown
-const COLOR_KRAMPUS_BG: u32 = 0x0a0a12ff;     // Near black
-const COLOR_SNOW: u32 = 0xffffffcc;           // Semi-transparent white
-const COLOR_GIFT_BOX: u32 = 0xdc143cff;       // Crimson red
-const COLOR_GIFT_BOW: u32 = 0xffd700ff;       // Gold
-const COLOR_PLAYER_BODY: u32 = 0x228b22ff;    // Forest green
-const COLOR_PLAYER_SKIN: u32 = 0xffdbacff;    // Skin tone
-const COLOR_PLAYER_HAT: u32 = 0xff0000ff;     // Red
+// Screen dimensions
+const SCREEN_W: f32 = 256.0;
+const SCREEN_H: f32 = 144.0;
+
+// Player constants
+const PLAYER_X: f32 = 40.0;  // Fixed X position
+const PLAYER_SPEED: f32 = 2.5;
+
+// Colors
+const COLOR_SKY: u32 = 0x1a2744ff;
+const COLOR_SNOW: u32 = 0xf0f8ffff;
+const COLOR_CHIMNEY: u32 = 0x8b4513ff;
+const COLOR_ROOF: u32 = 0xfffffaff;
+const COLOR_GIFT: u32 = 0xff0000ff;
+const COLOR_GOLD: u32 = 0xffd700ff;
 
 impl GameState {
     pub fn new() -> Self {
@@ -111,44 +129,54 @@ impl GameState {
             frame: 0,
             mode: MODE_TITLE,
             
-            jingle_timer: 15,
-            hurry_timer: 6,
-            krampus_timer: 10,
+            scroll_x: 0.0,
+            scroll_speed: 1.5,
             
-            player_x: 128.0,
-            player_y: 72.0,
-            speed: 2.0,
+            player_y: SCREEN_H / 2.0,
+            player_vel_y: 0.0,
+            sleigh_tilt: 0.0,
             
-            krampus_x: 10.0,
-            krampus_y: 10.0,
-            krampus_speed: 1.2,
-            
-            trap_x: [0.0; 5],
-            trap_y: [0.0; 5],
-            trap_count: 3,
+            chimneys: vec![],
+            next_chimney_spawn: 100.0,
             
             gifts: vec![],
             
+            krampus_x: SCREEN_W + 50.0,
+            krampus_y: SCREEN_H / 2.0,
+            krampus_active: false,
+            krampus_attack_timer: 600, // 10 seconds at 60fps
+            krampus_duration: 0,
+            projectiles: vec![],
+            krampus_warning: 0,
+            
+            health: 3,
             score: 0,
             high_score: 0,
-            round: 1,
-            gifts_collected_this_round: 0,
+            deliveries: 0,
+            naughty_meter: 0,
+            level: 1,
             
             screen_flash: 0,
             flash_color: 0xffffffff,
             screen_shake: 0,
+            invincible_timer: 0,
             
             snowflakes: vec![],
-            score_popups: vec![],
             
-            rng_seed: 12345,
+            tutorial_timer: 0,
+            first_play: true,
+            tutorial_step: 0,
+            
+            rng_seed: 42,
         };
         state.init_snowflakes();
-        state.spawn_round_elements();
         state
     }
     
-    // Simple pseudo-random number generator
+    // ========================================================================
+    // RANDOM
+    // ========================================================================
+    
     fn random(&mut self) -> u32 {
         self.rng_seed = self.rng_seed.wrapping_mul(1103515245).wrapping_add(12345);
         (self.rng_seed >> 16) & 0x7FFF
@@ -159,841 +187,951 @@ impl GameState {
         min + r * (max - min)
     }
     
-    // Initialize snowflakes
+    // ========================================================================
+    // INITIALIZATION
+    // ========================================================================
+    
     fn init_snowflakes(&mut self) {
         self.snowflakes.clear();
-        for _ in 0..30 {
-            // Pre-compute random values to avoid borrow issues
-            let x = self.random_range(0.0, 256.0);
-            let y = self.random_range(0.0, 144.0);
-            let speed = self.random_range(0.3, 1.2);
-            let size = (self.random() % 3 + 1) as u32;
-            let drift = self.random_range(-0.3, 0.3);
-            
-            self.snowflakes.push(Snowflake { x, y, speed, size, drift });
+        for _ in 0..25 {
+            let x = self.random_range(0.0, SCREEN_W);
+            let y = self.random_range(0.0, SCREEN_H);
+            let speed = self.random_range(0.5, 1.5);
+            let size = (self.random() % 2 + 1) as u32;
+            self.snowflakes.push(Snowflake { x, y, speed, size });
         }
     }
     
-    // Update snowflakes
-    fn update_snowflakes(&mut self) {
-        let frame = self.frame;
-        let seed = self.rng_seed;
+    fn start_game(&mut self) {
+        self.mode = MODE_DELIVERING;
+        self.scroll_x = 0.0;
+        self.scroll_speed = 1.5;
+        self.player_y = SCREEN_H / 2.0;
+        self.player_vel_y = 0.0;
+        self.sleigh_tilt = 0.0;
         
-        for (i, snow) in self.snowflakes.iter_mut().enumerate() {
-            snow.y += snow.speed;
-            snow.x += snow.drift + (frame as f32 / 20.0).sin() * 0.2;
-            
-            // Wrap around
-            if snow.y > 150.0 {
-                snow.y = -5.0;
-                // Use deterministic pseudo-random based on frame and index
-                snow.x = ((seed.wrapping_add(frame).wrapping_add(i as u32 * 7919)) % 256) as f32;
-            }
-            if snow.x < -5.0 { snow.x = 260.0; }
-            if snow.x > 260.0 { snow.x = -5.0; }
-        }
-    }
-    
-    // Draw snowflakes
-    fn draw_snowflakes(&self) {
-        for snow in &self.snowflakes {
-            circ!(x = snow.x as i32, y = snow.y as i32, d = snow.size, color = COLOR_SNOW);
-        }
-    }
-    
-    // Add score popup
-    fn add_score_popup(&mut self, x: f32, y: f32, value: u32) {
-        self.score_popups.push(ScorePopup {
-            x,
-            y,
-            value,
-            life: 45, // 0.75 seconds at 60fps
-        });
-    }
-    
-    // Update and draw score popups
-    fn update_score_popups(&mut self) {
-        self.score_popups.retain_mut(|popup| {
-            popup.y -= 0.8; // Float upward
-            popup.life -= 1;
-            popup.life > 0
-        });
-    }
-    
-    fn draw_score_popups(&self) {
-        for popup in &self.score_popups {
-            let alpha = ((popup.life as f32 / 45.0) * 255.0) as u32;
-            let color = 0xffd70000 | alpha;
-            text!("+{}", popup.value; x = popup.x as i32, y = popup.y as i32, font = "small", color = color);
-        }
-    }
-    
-    // Get screen shake offset
-    fn get_shake_offset(&self) -> (i32, i32) {
-        if self.screen_shake > 0 {
-            let intensity = (self.screen_shake as f32 / 2.0).min(4.0);
-            let shake_x = ((self.frame as f32 * 1.7).sin() * intensity) as i32;
-            let shake_y = ((self.frame as f32 * 2.3).cos() * intensity) as i32;
-            (shake_x, shake_y)
-        } else {
-            (0, 0)
-        }
-    }
-    
-    // Spawn traps and gifts for current round
-    fn spawn_round_elements(&mut self) {
-        // Calculate counts based on round (scales up)
-        self.trap_count = (2 + self.round).min(5);
-        let gift_count = (3 + (self.round / 2)).min(6);
-        
-        // Spawn traps at random positions (avoiding center spawn area)
-        for i in 0..self.trap_count as usize {
-            loop {
-                let x = self.random_range(20.0, 236.0);
-                let y = self.random_range(20.0, 124.0);
-                
-                // Avoid spawning near player start position
-                let dist_to_center = ((x - 128.0).powi(2) + (y - 72.0).powi(2)).sqrt();
-                if dist_to_center > 40.0 {
-                    self.trap_x[i] = x;
-                    self.trap_y[i] = y;
-                    break;
-                }
-            }
-        }
-        
-        // Clear and spawn gifts
+        self.chimneys.clear();
+        self.next_chimney_spawn = 150.0;
         self.gifts.clear();
-        for _ in 0..gift_count {
-            loop {
-                let x = self.random_range(24.0, 232.0);
-                let y = self.random_range(24.0, 120.0);
-                
-                // Check distance from traps
-                let mut too_close = false;
-                for j in 0..self.trap_count as usize {
-                    let dist = ((x - self.trap_x[j]).powi(2) + (y - self.trap_y[j]).powi(2)).sqrt();
-                    if dist < 24.0 {
-                        too_close = true;
-                        break;
-                    }
-                }
-                
-                if !too_close {
-                    self.gifts.push(Gift { x, y, collected: false });
-                    break;
-                }
-            }
+        self.projectiles.clear();
+        
+        self.krampus_active = false;
+        self.krampus_attack_timer = 600;
+        self.krampus_warning = 0;
+        self.krampus_duration = 0;
+        
+        self.health = 3;
+        self.score = 0;
+        self.deliveries = 0;
+        self.naughty_meter = 0;
+        self.level = 1;
+        self.invincible_timer = 0;
+        
+        // Tutorial: 10 seconds on first play
+        if self.first_play {
+            self.tutorial_timer = 600; // 10 seconds at 60fps
+            self.tutorial_step = 0;
+        } else {
+            self.tutorial_timer = 0;
         }
-    }
-    
-    fn start_round(&mut self) {
-        self.mode = MODE_JINGLE;
-        self.jingle_timer = (15 - (self.round as i32 - 1).min(5)).max(8);
-        self.hurry_timer = (6 - (self.round as i32 / 3)).max(3);
-        self.krampus_timer = (10 - (self.round as i32 / 2)).max(5);
         
-        // Increase Krampus speed each round
-        self.krampus_speed = 1.2 + (self.round as f32 - 1.0) * 0.15;
-        
-        // Reset player to center
-        self.player_x = 128.0;
-        self.player_y = 72.0;
-        
-        self.gifts_collected_this_round = 0;
-        
-        // Respawn elements
-        self.spawn_round_elements();
-        
-        // Flash effect
         self.screen_flash = 8;
         self.flash_color = 0xffffffff;
-        self.screen_shake = 6;
     }
     
     fn reset_game(&mut self) {
         if self.score > self.high_score {
             self.high_score = self.score;
         }
-        self.score = 0;
-        self.round = 1;
-        self.krampus_speed = 1.2;
-        self.score_popups.clear();
-        self.start_round();
+        self.first_play = false; // No more tutorial after first game
+        self.start_game();
     }
     
     // ========================================================================
-    // AUDIO SYSTEM
+    // PLAYER MOVEMENT
     // ========================================================================
     
-    /// Play background music based on current mode
-    fn play_mode_music(&self) {
-        // Stop all music tracks first
-        audio::stop("jingle_bgm");
-        audio::stop("hurry_bgm");
-        audio::stop("krampus_bgm");
-        audio::stop("title_bgm");
-        
-        // Play the appropriate track
-        match self.mode {
-            MODE_TITLE => {
-                if !audio::is_playing("title_bgm") {
-                    audio::play("title_bgm");
-                }
-            }
-            MODE_JINGLE => {
-                if !audio::is_playing("jingle_bgm") {
-                    audio::play("jingle_bgm");
-                }
-            }
-            MODE_HURRY => {
-                if !audio::is_playing("hurry_bgm") {
-                    audio::play("hurry_bgm");
-                }
-            }
-            MODE_KRAMPUS => {
-                if !audio::is_playing("krampus_bgm") {
-                    audio::play("krampus_bgm");
-                }
-            }
-            MODE_GAMEOVER => {
-                // Silence or play game over music
-                audio::stop("jingle_bgm");
-                audio::stop("hurry_bgm");
-                audio::stop("krampus_bgm");
-            }
-            _ => {}
-        }
-    }
-    
-    /// Keep background music looping
-    fn update_music(&self) {
-        match self.mode {
-            MODE_TITLE => {
-                if !audio::is_playing("title_bgm") {
-                    audio::play("title_bgm");
-                }
-            }
-            MODE_JINGLE => {
-                if !audio::is_playing("jingle_bgm") {
-                    audio::play("jingle_bgm");
-                }
-            }
-            MODE_HURRY => {
-                if !audio::is_playing("hurry_bgm") {
-                    audio::play("hurry_bgm");
-                }
-            }
-            MODE_KRAMPUS => {
-                if !audio::is_playing("krampus_bgm") {
-                    audio::play("krampus_bgm");
-                }
-            }
-            _ => {}
-        }
-    }
-    
-    /// Play sound effects
-    fn play_sfx(name: &str) {
-        audio::play(name);
-    }
-
-    fn tick_timer(&mut self) {
-        if self.frame % 60 == 0 {
-            match self.mode {
-                MODE_JINGLE => self.jingle_timer -= 1,
-                MODE_HURRY => self.hurry_timer -= 1,
-                MODE_KRAMPUS => self.krampus_timer -= 1,
-                _ => {}
-            }
-        }
-    }
-
     fn move_player(&mut self) {
-        let mut dx = 0.0;
-        let mut dy = 0.0;
-
-        // Gamepad controls (works with keyboard arrows too)
         let gp = gamepad::get(0);
-        if gp.left.pressed() { dx -= self.speed; }
-        if gp.right.pressed() { dx += self.speed; }
-        if gp.up.pressed() { dy -= self.speed; }
-        if gp.down.pressed() { dy += self.speed; }
         
-        // Normalize diagonal movement
-        if dx != 0.0 && dy != 0.0 {
-            let factor = 0.707; // 1/sqrt(2)
-            dx *= factor;
-            dy *= factor;
+        // Vertical movement only
+        if gp.up.pressed() {
+            self.player_vel_y = -PLAYER_SPEED;
+            self.sleigh_tilt = -8.0; // Tilt up
+        } else if gp.down.pressed() {
+            self.player_vel_y = PLAYER_SPEED;
+            self.sleigh_tilt = 8.0; // Tilt down
+        } else {
+            self.player_vel_y *= 0.85; // Deceleration
+            self.sleigh_tilt *= 0.8;   // Return to level
         }
-
-        self.player_x = (self.player_x + dx).clamp(12.0, 244.0);
-        self.player_y = (self.player_y + dy).clamp(16.0, 132.0);
+        
+        self.player_y += self.player_vel_y;
+        self.player_y = self.player_y.clamp(20.0, SCREEN_H - 30.0);
     }
     
-    fn collect_gifts(&mut self) {
-        // First pass: find collected gifts and gather popup data
-        let mut popups_to_add: Vec<(f32, f32, u32)> = vec![];
-        let player_x = self.player_x;
-        let player_y = self.player_y;
-        let round = self.round;
+    // ========================================================================
+    // CHIMNEY SYSTEM
+    // ========================================================================
+    
+    fn spawn_chimney(&mut self) {
+        let y = self.random_range(SCREEN_H * 0.5, SCREEN_H - 20.0);
+        self.chimneys.push(Chimney {
+            x: SCREEN_W + 20.0,
+            y,
+            delivered: false,
+        });
+        
+        // Next chimney spawn distance (varies)
+        self.next_chimney_spawn = self.random_range(80.0, 150.0);
+    }
+    
+    fn update_chimneys(&mut self) {
+        // Spawn new chimneys
+        if self.chimneys.is_empty() || 
+           self.chimneys.last().map(|c| c.x < SCREEN_W - self.next_chimney_spawn).unwrap_or(true) {
+            self.spawn_chimney();
+        }
+        
+        // Track missed chimneys
+        let mut missed_count = 0;
+        
+        // Update positions and remove off-screen
+        self.chimneys.retain(|c| {
+            if c.x < -40.0 {
+                if !c.delivered {
+                    missed_count += 1;
+                }
+                false
+            } else {
+                true
+            }
+        });
+        
+        // Increase naughty meter for missed deliveries
+        self.naughty_meter = (self.naughty_meter + missed_count * 20).min(100);
+        
+        // Move chimneys
+        for chimney in &mut self.chimneys {
+            chimney.x -= self.scroll_speed;
+        }
+    }
+    
+    // ========================================================================
+    // GIFT DROPPING
+    // ========================================================================
+    
+    fn drop_gift(&mut self) {
+        let gp = gamepad::get(0);
+        let kb = keyboard::get();
+        
+        // Drop with Enter key, Space, or A/B button
+        let should_drop = kb.enter().just_pressed() 
+            || kb.space().just_pressed()
+            || gp.a.just_pressed() 
+            || gp.b.just_pressed();
+        
+        if should_drop {
+            // Find the nearest chimney ahead (increased range for easier aiming)
+            let mut best_chimney: Option<usize> = None;
+            let mut best_dist = f32::MAX;
+            
+            for (i, chimney) in self.chimneys.iter().enumerate() {
+                // Larger detection window: 150 pixels ahead
+                if !chimney.delivered && chimney.x > PLAYER_X - 20.0 && chimney.x < PLAYER_X + 150.0 {
+                    let dist = (chimney.x - PLAYER_X).abs();
+                    if dist < best_dist {
+                        best_dist = dist;
+                        best_chimney = Some(i);
+                    }
+                }
+            }
+            
+            // Drop a gift
+            self.gifts.push(FallingGift {
+                x: PLAYER_X + 8.0,
+                y: self.player_y + 12.0,
+                vel_y: 1.0,
+                target_chimney: best_chimney.unwrap_or(usize::MAX),
+                active: true,
+            });
+            
+            // Visual feedback that gift was dropped
+            self.screen_flash = 2;
+            self.flash_color = 0xffffff44;
+        }
+    }
+    
+    fn update_gifts(&mut self) {
+        let scroll_speed = self.scroll_speed;
+        let mut score_gained = 0u32;
+        let mut deliveries_made = 0u32;
+        
+        // Get chimney positions for collision
+        let chimney_data: Vec<(f32, f32, bool)> = self.chimneys
+            .iter()
+            .map(|c| (c.x, c.y, c.delivered))
+            .collect();
         
         for gift in &mut self.gifts {
-            if !gift.collected {
-                let dist = ((player_x - gift.x).powi(2) + (player_y - gift.y).powi(2)).sqrt();
-                if dist < 14.0 {
-                    gift.collected = true;
-                    let points = 25 + (round * 5);
-                    self.score += points;
-                    self.gifts_collected_this_round += 1;
+            if !gift.active { continue; }
+            
+            // Gift falls with arc (moves with scroll + falls)
+            gift.x -= scroll_speed * 0.3;
+            gift.y += gift.vel_y;
+            gift.vel_y += 0.15; // Gravity
+            
+            // Check collision with chimneys
+            for (i, &(cx, cy, delivered)) in chimney_data.iter().enumerate() {
+                if !delivered {
+                    let dx = gift.x - cx;
+                    let dy = gift.y - cy;
                     
-                    // Queue popup for later
-                    popups_to_add.push((gift.x, gift.y - 10.0, points));
-                    
-                    // Play pickup sound
-                    Self::play_sfx("pickup");
-                    
-                    // Small flash effect
-                    self.screen_flash = 4;
-                    self.flash_color = 0x00ff00ff; // Green flash
+                    // GENEROUS hitbox for easier gameplay (25x30 area)
+                    // Gift must be close horizontally and near/past chimney vertically
+                    if dx.abs() < 25.0 && dy > -10.0 && dy < 30.0 {
+                        gift.active = false;
+                        score_gained += 100 + self.level * 10;
+                        deliveries_made += 1;
+                        
+                        // Mark chimney as delivered
+                        if i < self.chimneys.len() {
+                            self.chimneys[i].delivered = true;
+                        }
+                        break;
+                    }
                 }
             }
+            
+            // Remove if off screen
+            if gift.y > SCREEN_H + 20.0 || gift.x < -20.0 {
+                gift.active = false;
+            }
         }
         
-        // Second pass: add popups
-        for (x, y, points) in popups_to_add {
-            self.add_score_popup(x, y, points);
+        // Apply score and deliveries
+        self.score += score_gained;
+        self.deliveries += deliveries_made;
+        
+        // Flash on delivery
+        if deliveries_made > 0 {
+            self.screen_flash = 4;
+            self.flash_color = 0x00ff00ff;
+            // Reduce naughty meter on successful delivery
+            self.naughty_meter = self.naughty_meter.saturating_sub(10);
+        }
+        
+        // Clean up inactive gifts
+        self.gifts.retain(|g| g.active);
+    }
+    
+    // ========================================================================
+    // KRAMPUS SYSTEM
+    // ========================================================================
+    
+    fn check_krampus_trigger(&mut self) {
+        if self.krampus_active || self.krampus_warning > 0 { return; }
+        
+        // Trigger conditions: timer or naughty meter
+        self.krampus_attack_timer = self.krampus_attack_timer.saturating_sub(1);
+        
+        if self.krampus_attack_timer == 0 || self.naughty_meter >= 80 {
+            // Start warning countdown
+            self.krampus_warning = 120; // 2 seconds warning
+            self.screen_shake = 10;
         }
     }
     
-    fn all_gifts_collected(&self) -> bool {
-        self.gifts.iter().all(|g| g.collected)
-    }
-
-    fn stepped_on_trap(&self) -> bool {
-        for i in 0..self.trap_count as usize {
-            let dist = ((self.player_x - self.trap_x[i]).powi(2) + (self.player_y - self.trap_y[i]).powi(2)).sqrt();
-            if dist < 10.0 {
-                return true;
+    fn update_krampus_warning(&mut self) {
+        if self.krampus_warning > 0 {
+            self.krampus_warning -= 1;
+            
+            if self.krampus_warning == 0 {
+                // Krampus attack begins!
+                self.mode = MODE_KRAMPUS;
+                self.krampus_active = true;
+                self.krampus_x = SCREEN_W + 30.0;
+                self.krampus_y = self.random_range(40.0, SCREEN_H - 40.0);
+                self.krampus_duration = 360; // 6 seconds
+                self.screen_flash = 15;
+                self.flash_color = 0xff0000ff;
+                self.screen_shake = 15;
             }
         }
-        false
     }
-
+    
     fn update_krampus(&mut self) {
-        let dx = self.player_x - self.krampus_x;
+        if !self.krampus_active { return; }
+        
+        // Krampus flies in from right
+        if self.krampus_x > SCREEN_W - 60.0 {
+            self.krampus_x -= 3.0; // Faster entry
+        }
+        
+        // Krampus tracks player Y more aggressively
         let dy = self.player_y - self.krampus_y;
-        let dist = (dx * dx + dy * dy).sqrt().max(0.01);
-
-        self.krampus_x += dx / dist * self.krampus_speed;
-        self.krampus_y += dy / dist * self.krampus_speed;
-
-        // Collision check
-        if dist < 14.0 {
-            self.mode = MODE_GAMEOVER;
-            self.screen_flash = 20;
-            self.flash_color = 0xff0000ff;
-            self.screen_shake = 15;
-            Self::play_sfx("gameover");
-            self.play_mode_music();
+        self.krampus_y += dy * 0.035;
+        
+        // Add bobbing motion for menace
+        self.krampus_y += (self.frame as f32 / 10.0).sin() * 0.5;
+        
+        // Fire projectiles - rate increases with level
+        let fire_rate = (50 - (self.level * 5).min(25)).max(20);
+        if self.frame % fire_rate == 0 {
+            self.fire_projectile_pattern();
+        }
+        
+        // Duration countdown
+        self.krampus_duration = self.krampus_duration.saturating_sub(1);
+        
+        if self.krampus_duration == 0 {
+            // Krampus retreats
+            self.krampus_active = false;
+            self.mode = MODE_DELIVERING;
+            self.krampus_attack_timer = (600 - (self.level * 40).min(400)).max(180);
+            self.naughty_meter = 0;
+            
+            // Survival bonus
+            self.score += 200 + self.level * 50;
+            self.screen_flash = 10;
+            self.flash_color = 0x00ff00ff;
+            self.screen_shake = 5;
         }
     }
     
-    fn draw_timer_bar(&self, shake_x: i32, shake_y: i32) {
-        let (current, max, color) = match self.mode {
-            MODE_JINGLE => (self.jingle_timer, 15, 0x4ade80ff),   // Green
-            MODE_HURRY => (self.hurry_timer, 6, 0xfbbf24ff),      // Yellow
-            MODE_KRAMPUS => (self.krampus_timer, 10, 0xef4444ff), // Red
-            _ => (0, 1, 0x666666ff),
-        };
+    /// Fire projectiles with varying patterns based on level
+    fn fire_projectile_pattern(&mut self) {
+        let pattern = (self.frame / 60 + self.level as u32) % 4;
+        let base_speed = 2.5 + self.level as f32 * 0.3;
         
-        let bar_width = ((current as f32 / max as f32) * 200.0) as u32;
+        let dx = PLAYER_X - self.krampus_x;
+        let dy = self.player_y - self.krampus_y;
+        let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+        let dir_x = dx / dist;
+        let dir_y = dy / dist;
         
-        // Background
-        rect!(x = 28 + shake_x, y = 2 + shake_y, w = 200, h = 6, color = 0x333333ff);
-        // Timer bar
-        rect!(x = 28 + shake_x, y = 2 + shake_y, w = bar_width, h = 6, color = color);
-    }
-    
-    fn draw_mode_indicator(&self, shake_x: i32, shake_y: i32) {
-        let (mode_text, color) = match self.mode {
-            MODE_JINGLE => ("JINGLE", 0x4ade80ff),
-            MODE_HURRY => ("HURRY!", 0xfbbf24ff),
-            MODE_KRAMPUS => ("KRAMPUS", 0xef4444ff),
-            _ => ("", 0x000000ff),
-        };
-        
-        if !mode_text.is_empty() {
-            text!(mode_text, x = 200 + shake_x, y = 4 + shake_y, font = "medium", color = color);
-        }
-    }
-    
-    // Draw Christmas tree decorations in background
-    fn draw_christmas_decorations(&self, shake_x: i32, shake_y: i32) {
-        // Draw some decorative elements based on mode
-        if self.mode == MODE_JINGLE || self.mode == MODE_HURRY {
-            // Corner decorations (holly leaves)
-            let pulse = ((self.frame as f32 / 30.0).sin() * 2.0) as i32;
-            
-            // Top-left holly
-            circ!(x = 10 + shake_x, y = 20 + shake_y + pulse, d = 8, color = 0x228b22ff);
-            circ!(x = 16 + shake_x, y = 16 + shake_y + pulse, d = 8, color = 0x228b22ff);
-            circ!(x = 13 + shake_x, y = 18 + shake_y + pulse, d = 4, color = 0xff0000ff);
-            
-            // Bottom-right holly  
-            circ!(x = 246 + shake_x, y = 124 + shake_y - pulse, d = 8, color = 0x228b22ff);
-            circ!(x = 240 + shake_x, y = 128 + shake_y - pulse, d = 8, color = 0x228b22ff);
-            circ!(x = 243 + shake_x, y = 126 + shake_y - pulse, d = 4, color = 0xff0000ff);
-        }
-    }
-    
-    // Draw player with enhanced visuals
-    fn draw_player(&self, shake_x: i32, shake_y: i32) {
-        let gp = gamepad::get(0);
-        let wobble = if gp.left.pressed() || gp.right.pressed() || gp.up.pressed() || gp.down.pressed() {
-            ((self.frame as f32 / 4.0).sin() * 1.5) as f32
-        } else {
-            0.0
-        };
-        
-        let px = (self.player_x - 8.0) as i32 + shake_x;
-        let py = (self.player_y - 8.0 + wobble) as i32 + shake_y;
-        
-        // Shadow
-        ellipse!(x = px + 8, y = py + 18, w = 14, h = 6, color = 0x00000044);
-        
-        // Body (green tunic)
-        rect!(x = px + 2, y = py + 6, w = 12, h = 10, color = COLOR_PLAYER_BODY);
-        
-        // Belt
-        rect!(x = px + 2, y = py + 10, w = 12, h = 2, color = 0x8b4513ff);
-        circ!(x = px + 8, y = py + 11, d = 3, color = COLOR_GIFT_BOW);
-        
-        // Face
-        circ!(x = px + 8, y = py + 5, d = 10, color = COLOR_PLAYER_SKIN);
-        
-        // Eyes
-        circ!(x = px + 6, y = py + 4, d = 2, color = 0x000000ff);
-        circ!(x = px + 10, y = py + 4, d = 2, color = 0x000000ff);
-        
-        // Red pointy hat
-        rect!(x = px + 3, y = py - 2, w = 10, h = 6, color = COLOR_PLAYER_HAT);
-        rect!(x = px + 5, y = py - 5, w = 6, h = 4, color = COLOR_PLAYER_HAT);
-        rect!(x = px + 7, y = py - 7, w = 2, h = 3, color = COLOR_PLAYER_HAT);
-        
-        // White pom-pom on hat
-        circ!(x = px + 8, y = py - 7, d = 4, color = 0xffffffff);
-    }
-    
-    // Draw gift with enhanced visuals
-    fn draw_gift(&self, x: f32, y: f32, pulse: f32, shake_x: i32, shake_y: i32) {
-        let gx = (x - 6.0) as i32 + shake_x;
-        let gy = (y - 6.0 + pulse) as i32 + shake_y;
-        
-        // Shadow
-        ellipse!(x = gx + 6, y = gy + 14, w = 12, h = 4, color = 0x00000044);
-        
-        // Gift box body
-        rect!(x = gx, y = gy, w = 12, h = 12, color = COLOR_GIFT_BOX);
-        
-        // Gift box highlight
-        rect!(x = gx, y = gy, w = 3, h = 12, color = 0xff3333ff);
-        
-        // Ribbon vertical
-        rect!(x = gx + 5, y = gy, w = 2, h = 12, color = COLOR_GIFT_BOW);
-        
-        // Ribbon horizontal
-        rect!(x = gx, y = gy + 5, w = 12, h = 2, color = COLOR_GIFT_BOW);
-        
-        // Bow
-        circ!(x = gx + 6, y = gy - 1, d = 5, color = COLOR_GIFT_BOW);
-        circ!(x = gx + 2, y = gy - 2, d = 4, color = COLOR_GIFT_BOW);
-        circ!(x = gx + 10, y = gy - 2, d = 4, color = COLOR_GIFT_BOW);
-    }
-    
-    // Draw trap with enhanced visuals
-    fn draw_trap(&self, x: f32, y: f32, visible: bool, shake_x: i32, shake_y: i32) {
-        let tx = x as i32 + shake_x;
-        let ty = y as i32 + shake_y;
-        
-        if visible {
-            // Visible trap - looks like dark ice/coal
-            let pulse = ((self.frame as f32 / 5.0).sin() * 3.0).abs() as u32;
-            
-            // Outer glow
-            circ!(x = tx, y = ty, d = 14 + pulse, color = 0x44000088);
-            
-            // Dark center
-            circ!(x = tx, y = ty, d = 12, color = 0x220000ff);
-            circ!(x = tx, y = ty, d = 8, color = 0x440000ff);
-            
-            // Warning sparkle
-            if (self.frame / 8) % 2 == 0 {
-                circ!(x = tx - 3, y = ty - 3, d = 2, color = 0xff6600ff);
+        match pattern {
+            0 => {
+                // Single aimed shot
+                self.spawn_projectile(dir_x * base_speed, dir_y * base_speed);
             }
-        } else {
-            // Hidden trap - subtle hint
-            circ!(x = tx, y = ty, d = 6, color = 0x33333344);
+            1 => {
+                // 3-way spread
+                self.spawn_projectile(dir_x * base_speed, dir_y * base_speed);
+                self.spawn_projectile(dir_x * base_speed - 0.8, dir_y * base_speed - 0.8);
+                self.spawn_projectile(dir_x * base_speed + 0.8, dir_y * base_speed + 0.8);
+            }
+            2 => {
+                // Horizontal wave
+                self.spawn_projectile(-base_speed, -1.5);
+                self.spawn_projectile(-base_speed, 0.0);
+                self.spawn_projectile(-base_speed, 1.5);
+            }
+            _ => {
+                // Diagonal cross
+                self.spawn_projectile(-base_speed, -base_speed * 0.5);
+                self.spawn_projectile(-base_speed, base_speed * 0.5);
+            }
         }
     }
     
-    // Draw Krampus with enhanced visuals
-    fn draw_krampus(&self, shake_x: i32, shake_y: i32) {
-        let shake_x_extra = ((self.frame as f32 / 2.0).sin() * 2.0) as i32;
-        let shake_y_extra = ((self.frame as f32 / 3.0).cos() * 2.0) as i32;
+    fn spawn_projectile(&mut self, vel_x: f32, vel_y: f32) {
+        self.projectiles.push(Projectile {
+            x: self.krampus_x - 15.0,
+            y: self.krampus_y,
+            vel_x,
+            vel_y,
+            active: true,
+        });
+    }
+    
+    fn update_projectiles(&mut self) {
+        let player_y = self.player_y;
+        let mut hit = false;
+        let is_invincible = self.invincible_timer > 0;
         
-        let kx = (self.krampus_x - 12.0) as i32 + shake_x + shake_x_extra;
-        let ky = (self.krampus_y - 14.0) as i32 + shake_y + shake_y_extra;
+        for proj in &mut self.projectiles {
+            if !proj.active { continue; }
+            
+            proj.x += proj.vel_x;
+            proj.y += proj.vel_y;
+            
+            // Check collision with player (only if not invincible)
+            if !is_invincible {
+                let dx = proj.x - PLAYER_X;
+                let dy = proj.y - player_y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                
+                if dist < 14.0 {
+                    proj.active = false;
+                    hit = true;
+                }
+            }
+            
+            // Remove if off screen
+            if proj.x < -20.0 || proj.x > SCREEN_W + 20.0 ||
+               proj.y < -20.0 || proj.y > SCREEN_H + 20.0 {
+                proj.active = false;
+            }
+        }
+        
+        if hit {
+            self.health = self.health.saturating_sub(1);
+            self.screen_flash = 15;
+            self.flash_color = 0xff0000ff;
+            self.screen_shake = 12;
+            self.invincible_timer = 90; // 1.5 seconds of invincibility
+            
+            if self.health == 0 {
+                self.mode = MODE_GAMEOVER;
+                self.screen_shake = 25;
+                self.invincible_timer = 0;
+            }
+        }
+        
+        // Decrement invincibility
+        if self.invincible_timer > 0 {
+            self.invincible_timer -= 1;
+        }
+        
+        self.projectiles.retain(|p| p.active);
+    }
+    
+    // ========================================================================
+    // SCROLLING & PARALLAX
+    // ========================================================================
+    
+    fn update_scroll(&mut self) {
+        self.scroll_x += self.scroll_speed;
+        
+        // Progressive difficulty
+        if self.deliveries > 0 && self.deliveries % 10 == 0 && self.frame % 60 == 0 {
+            self.level += 1;
+            self.scroll_speed = (1.5 + self.level as f32 * 0.2).min(4.0);
+        }
+    }
+    
+    fn update_snowflakes(&mut self) {
+        let frame = self.frame;
+        let scroll = self.scroll_speed;
+        
+        for (i, snow) in self.snowflakes.iter_mut().enumerate() {
+            snow.y += snow.speed;
+            snow.x -= scroll * 0.5; // Move with background
+            snow.x += (frame as f32 / 20.0 + i as f32).sin() * 0.3;
+            
+            if snow.y > SCREEN_H + 5.0 {
+                snow.y = -5.0;
+                snow.x = (frame.wrapping_add(i as u32 * 7919) % 256) as f32;
+            }
+            if snow.x < -5.0 { snow.x = SCREEN_W + 5.0; }
+        }
+    }
+    
+    // ========================================================================
+    // GET SHAKE OFFSET
+    // ========================================================================
+    
+    fn get_shake(&self) -> (i32, i32) {
+        if self.screen_shake > 0 {
+            let intensity = (self.screen_shake as f32 / 3.0).min(4.0);
+            let sx = ((self.frame as f32 * 1.7).sin() * intensity) as i32;
+            let sy = ((self.frame as f32 * 2.3).cos() * intensity) as i32;
+            (sx, sy)
+        } else {
+            (0, 0)
+        }
+    }
+    
+    // ========================================================================
+    // DRAWING
+    // ========================================================================
+    
+    fn draw_background(&self, shake_x: i32, shake_y: i32) {
+        // Sky gradient (simple)
+        clear(COLOR_SKY);
+        
+        // Stars (far layer)
+        for i in 0..15 {
+            let star_x = ((i * 37 + 10) as f32 - (self.scroll_x * 0.1) % SCREEN_W) as i32;
+            let star_y = (i * 7 % 50 + 5) as i32;
+            circ!(x = star_x + shake_x, y = star_y + shake_y, d = 2, color = 0xffffff88);
+        }
+        
+        // Mountains (mid layer)
+        let mountain_offset = (self.scroll_x * 0.3) as i32 % 120;
+        for i in 0..4 {
+            let mx = i * 120 - mountain_offset + shake_x;
+            let my = 80 + shake_y;
+            // Simple triangle mountain
+            for row in 0..40 {
+                let width = row * 3;
+                rect!(x = mx + 60 - width / 2, y = my + row, w = width as u32, h = 1, color = 0x2a3f5fff);
+            }
+        }
+        
+        // Ground/snow layer
+        rect!(x = shake_x, y = 120 + shake_y, w = 256, h = 30, color = COLOR_SNOW);
+        
+        // Ground line
+        rect!(x = shake_x, y = 119 + shake_y, w = 256, h = 2, color = 0xc0d0e0ff);
+    }
+    
+    fn draw_snowflakes(&self) {
+        for snow in &self.snowflakes {
+            circ!(x = snow.x as i32, y = snow.y as i32, d = snow.size, color = 0xffffffaa);
+        }
+    }
+    
+    fn draw_chimney(&self, chimney: &Chimney, shake_x: i32, shake_y: i32) {
+        let cx = chimney.x as i32 + shake_x;
+        let cy = chimney.y as i32 + shake_y;
+        
+        // House base
+        rect!(x = cx - 20, y = cy + 10, w = 40, h = 30, color = 0x4a3728ff);
+        
+        // Roof
+        for row in 0..15 {
+            let width = 50 - row * 2;
+            rect!(x = cx - width / 2, y = cy + 10 - row, w = width as u32, h = 1, color = COLOR_ROOF);
+        }
+        
+        // Snow on roof
+        rect!(x = cx - 22, y = cy + 8, w = 44, h = 3, color = 0xf0f8ffff);
+        
+        // Chimney
+        rect!(x = cx - 6, y = cy - 10, w = 12, h = 20, color = COLOR_CHIMNEY);
+        
+        // Chimney top
+        rect!(x = cx - 8, y = cy - 12, w = 16, h = 4, color = 0x5c3a21ff);
+        
+        // Chimney glow if not delivered
+        if !chimney.delivered {
+            // Pulsing target indicator
+            let pulse = ((self.frame as f32 / 8.0).sin() * 30.0) as u32;
+            let glow_color = 0xffff0000 + (pulse << 24);
+            circ!(x = cx, y = cy - 8, d = 16 + (pulse / 10) as u32, color = glow_color);
+        } else {
+            // Checkmark / delivered indicator
+            circ!(x = cx, y = cy - 8, d = 12, color = 0x00ff0088);
+        }
+    }
+    
+    fn draw_sleigh(&self, shake_x: i32, shake_y: i32) {
+        // Blink when invincible (don't draw every other frame)
+        if self.invincible_timer > 0 && (self.frame / 4) % 2 == 0 {
+            return; // Skip drawing for blink effect
+        }
+        
+        let x = PLAYER_X as i32 + shake_x;
+        let y = self.player_y as i32 + shake_y;
+        let tilt = self.sleigh_tilt as i32;
+        
+        // Invincibility glow
+        if self.invincible_timer > 0 {
+            circ!(x = x + 10, y = y + 4, d = 40, color = 0xffffff22);
+        }
         
         // Shadow
-        ellipse!(x = kx + 12, y = ky + 28, w = 20, h = 6, color = 0x00000066);
+        ellipse!(x = x + 8, y = 125 + shake_y, w = 30, h = 6, color = 0x00000044);
         
-        // Body (dark fur)
-        rect!(x = kx + 4, y = ky + 10, w = 16, h = 16, color = 0x2a1a1aff);
+        // Sleigh body (red with gold trim)
+        rect!(x = x - 4, y = y + tilt / 2, w = 28, h = 12, color = 0xcc0000ff);
+        rect!(x = x - 6, y = y + 10 + tilt / 2, w = 32, h = 4, color = COLOR_GOLD);
+        
+        // Runner
+        rect!(x = x - 8, y = y + 14 + tilt / 2, w = 36, h = 2, color = 0x333333ff);
+        
+        // Santa (simplified)
+        circ!(x = x + 6, y = y - 2 + tilt / 2, d = 12, color = 0xffdbacff); // Face
+        rect!(x = x, y = y - 8 + tilt / 2, w = 12, h = 8, color = 0xff0000ff); // Hat
+        circ!(x = x + 6, y = y - 10 + tilt / 2, d = 5, color = 0xffffffff); // Pom
+        
+        // Reindeer silhouette
+        rect!(x = x + 30, y = y + 2 + tilt / 3, w = 16, h = 8, color = 0x8b4513cc);
+        circ!(x = x + 48, y = y + tilt / 3, d = 8, color = 0x8b4513cc);
+        // Red nose!
+        circ!(x = x + 52, y = y + tilt / 3, d = 4, color = 0xff0000ff);
+    }
+    
+    fn draw_falling_gift(&self, gift: &FallingGift, shake_x: i32, shake_y: i32) {
+        let x = gift.x as i32 + shake_x;
+        let y = gift.y as i32 + shake_y;
+        
+        // Gift box
+        rect!(x = x - 5, y = y - 5, w = 10, h = 10, color = COLOR_GIFT);
+        // Ribbon
+        rect!(x = x - 1, y = y - 5, w = 2, h = 10, color = COLOR_GOLD);
+        rect!(x = x - 5, y = y - 1, w = 10, h = 2, color = COLOR_GOLD);
+    }
+    
+    fn draw_krampus(&self, shake_x: i32, shake_y: i32) {
+        if !self.krampus_active { return; }
+        
+        let x = self.krampus_x as i32 + shake_x;
+        let y = self.krampus_y as i32 + shake_y;
+        let shake = ((self.frame as f32 / 2.0).sin() * 3.0) as i32;
+        let wing_flap = ((self.frame as f32 / 5.0).sin() * 8.0) as i32;
+        
+        // Ominous red aura
+        let aura_pulse = ((self.frame as f32 / 8.0).sin() * 20.0) as u32;
+        circ!(x = x, y = y, d = 50 + aura_pulse, color = 0x44000022);
+        circ!(x = x, y = y, d = 40 + aura_pulse, color = 0x66000033);
+        
+        // Wings/cape (flapping)
+        rect!(x = x + 10, y = y - 15 + wing_flap / 2, w = 20, h = 25, color = 0x1a0a0aff);
+        rect!(x = x + 5, y = y - 10 - wing_flap / 2, w = 25, h = 20, color = 0x1a0a0aff);
+        
+        // Body (larger, more menacing)
+        rect!(x = x - 14 + shake, y = y - 10, w = 28, h = 24, color = 0x2a1a1aff);
+        
+        // Fur texture lines
+        for i in 0..4 {
+            rect!(x = x - 10 + i * 6 + shake, y = y - 8 + (i % 2) * 4, w = 2, h = 18, color = 0x3a2a2aff);
+        }
         
         // Head
-        circ!(x = kx + 12, y = ky + 10, d = 14, color = 0x3a2020ff);
+        circ!(x = x + shake, y = y - 14, d = 18, color = 0x3a2020ff);
         
-        // Horns
-        rect!(x = kx + 2, y = ky - 2, w = 4, h = 12, color = 0x4a3030ff);
-        rect!(x = kx + 18, y = ky - 2, w = 4, h = 12, color = 0x4a3030ff);
-        rect!(x = kx, y = ky - 4, w = 4, h = 4, color = 0x4a3030ff);
-        rect!(x = kx + 20, y = ky - 4, w = 4, h = 4, color = 0x4a3030ff);
+        // Horns (larger, curved look)
+        rect!(x = x - 14 + shake, y = y - 30, w = 5, h = 18, color = 0x4a3030ff);
+        rect!(x = x - 16 + shake, y = y - 32, w = 5, h = 6, color = 0x5a4040ff);
+        rect!(x = x + 9 + shake, y = y - 30, w = 5, h = 18, color = 0x4a3030ff);
+        rect!(x = x + 11 + shake, y = y - 32, w = 5, h = 6, color = 0x5a4040ff);
         
-        // Glowing red eyes
-        let eye_pulse = ((self.frame as f32 / 4.0).sin() * 30.0) as u32;
-        let eye_color = 0xff0000ff - (eye_pulse << 8);
-        circ!(x = kx + 8, y = ky + 8, d = 4, color = eye_color);
-        circ!(x = kx + 16, y = ky + 8, d = 4, color = eye_color);
+        // Glowing eyes (intense)
+        let eye_glow = ((self.frame as f32 / 3.0).sin() * 60.0).abs() as u32;
+        circ!(x = x - 5 + shake, y = y - 16, d = 6, color = 0xff0000ff);
+        circ!(x = x + 5 + shake, y = y - 16, d = 6, color = 0xff0000ff);
+        // Eye glow halos
+        circ!(x = x - 5 + shake, y = y - 16, d = 10, color = 0xff000044 + (eye_glow << 24));
+        circ!(x = x + 5 + shake, y = y - 16, d = 10, color = 0xff000044 + (eye_glow << 24));
         
-        // Eye glow
-        circ!(x = kx + 8, y = ky + 8, d = 6, color = 0xff000044);
-        circ!(x = kx + 16, y = ky + 8, d = 6, color = 0xff000044);
+        // Menacing grin
+        rect!(x = x - 6 + shake, y = y - 8, w = 12, h = 3, color = 0x000000ff);
+        // Teeth
+        for i in 0..4 {
+            rect!(x = x - 5 + i * 3 + shake, y = y - 8, w = 2, h = 2, color = 0xffffffcc);
+        }
         
-        // Mouth (menacing grin)
-        rect!(x = kx + 7, y = ky + 14, w = 10, h = 2, color = 0x000000ff);
+        // Chains (swinging)
+        let chain_swing = ((self.frame as f32 / 8.0).sin() * 4.0) as i32;
+        for i in 0..4 {
+            let cx = x - 20 - i * 5 + chain_swing;
+            let cy = y + 10 + i * 3;
+            circ!(x = cx, y = cy, d = 4, color = 0x555555ff);
+        }
         
-        // Chains (dragging behind)
-        let chain_offset = (self.frame % 10) as i32;
+        // Claws
+        rect!(x = x - 18 + shake, y = y + 8, w = 6, h = 8, color = 0x1a0a0aff);
+        rect!(x = x + 12 + shake, y = y + 8, w = 6, h = 8, color = 0x1a0a0aff);
+    }
+    
+    fn draw_projectile(&self, proj: &Projectile, shake_x: i32, shake_y: i32) {
+        let x = proj.x as i32 + shake_x;
+        let y = proj.y as i32 + shake_y;
+        
+        // Flame trail
+        let trail_len = 3;
+        for i in 1..=trail_len {
+            let trail_x = x + (proj.vel_x * i as f32 * 2.0) as i32;
+            let trail_y = y + (proj.vel_y * i as f32 * 2.0) as i32;
+            let alpha = (0x88 - i * 0x20) as u32;
+            circ!(x = trail_x, y = trail_y, d = 6 - i as u32, color = 0xff330000 + alpha);
+        }
+        
+        // Core fireball with glow
+        circ!(x = x, y = y, d = 12, color = 0x44000044); // Outer glow
+        circ!(x = x, y = y, d = 8, color = 0x880000ff);  // Dark core
+        circ!(x = x, y = y, d = 6, color = 0xff2200ff);  // Fire
+        circ!(x = x, y = y, d = 3, color = 0xffcc00ff);  // Hot center
+    }
+    
+    fn draw_ui(&self, shake_x: i32, shake_y: i32) {
+        // Health hearts
         for i in 0..3 {
-            let cx = kx - 5 - i * 4 - chain_offset / 2;
-            let cy = ky + 20 + (i as f32 * 1.5) as i32;
-            circ!(x = cx, y = cy, d = 3, color = 0x666666ff);
+            let hx = 8 + i * 14 + shake_x as u32;
+            let color = if i < self.health { 0xff0000ff } else { 0x333333ff };
+            // Simple heart shape
+            circ!(x = hx as i32, y = 10 + shake_y, d = 8, color = color);
+            circ!(x = hx as i32 + 6, y = 10 + shake_y, d = 8, color = color);
+            rect!(x = hx as i32 - 4, y = 10 + shake_y, w = 14, h = 6, color = color);
+        }
+        
+        // Score
+        text!("SCORE: {}", self.score; x = 180 + shake_x, y = 4 + shake_y, font = "small", color = COLOR_GOLD);
+        
+        // Deliveries
+        text!("Gifts: {}", self.deliveries; x = 180 + shake_x, y = 14 + shake_y, font = "small", color = 0x00ff00ff);
+        
+        // Level
+        text!("Lv.{}", self.level; x = 120 + shake_x, y = 4 + shake_y, font = "small", color = 0xffffffff);
+        
+        // Naughty meter (if > 0)
+        if self.naughty_meter > 0 {
+            rect!(x = 60 + shake_x, y = 136 + shake_y, w = 50, h = 6, color = 0x333333ff);
+            let bar_w = (self.naughty_meter as u32 * 50 / 100).min(50);
+            let bar_color = if self.naughty_meter > 60 { 0xff0000ff } else { 0xffaa00ff };
+            rect!(x = 60 + shake_x, y = 136 + shake_y, w = bar_w, h = 6, color = bar_color);
+            text!("NAUGHTY", x = 60 + shake_x, y = 128 + shake_y, font = "small", color = bar_color);
+        }
+        
+        // Krampus warning
+        if self.krampus_warning > 0 && (self.frame / 8) % 2 == 0 {
+            text!("!! KRAMPUS COMING !!", x = 60, y = 60, font = "medium", color = 0xff0000ff);
         }
     }
-
+    
+    /// Draw tutorial overlay during first game
+    fn draw_tutorial(&self) {
+        if self.tutorial_timer == 0 { return; }
+        
+        // Semi-transparent overlay at bottom
+        rect!(x = 0, y = 100, w = 256, h = 44, color = 0x000000aa);
+        
+        // Calculate which step to show (changes every ~2.5 seconds)
+        let time_elapsed = 600 - self.tutorial_timer;
+        let step = (time_elapsed / 150) as u8; // 4 steps over 10 seconds
+        
+        // Blinking effect for emphasis
+        let show_text = (self.frame / 15) % 2 == 0;
+        
+        match step {
+            0 => {
+                // Step 1: Movement
+                text!("TUTORIAL", x = 100, y = 104, font = "medium", color = COLOR_GOLD);
+                if show_text {
+                    text!("[UP/DOWN] Move sleigh", x = 60, y = 120, font = "small", color = 0xffffffff);
+                }
+                // Arrow indicators
+                text!("^", x = 20, y = 108, font = "medium", color = 0x00ff00ff);
+                text!("v", x = 20, y = 128, font = "medium", color = 0x00ff00ff);
+            }
+            1 => {
+                // Step 2: Dropping gifts
+                text!("DROP GIFTS", x = 88, y = 104, font = "medium", color = COLOR_GOLD);
+                if show_text {
+                    text!("[ENTER] or [SPACE] to drop", x = 44, y = 120, font = "small", color = 0xffffffff);
+                }
+                // Key indicator
+                rect!(x = 200, y = 115, w = 48, h = 16, color = 0x00aa00ff);
+                text!("ENTER", x = 204, y = 118, font = "small", color = 0xffffffff);
+            }
+            2 => {
+                // Step 3: Hit chimneys
+                text!("AIM FOR CHIMNEYS!", x = 68, y = 104, font = "medium", color = COLOR_GOLD);
+                if show_text {
+                    text!("Drop gifts on glowing targets", x = 32, y = 120, font = "small", color = 0xffffffff);
+                }
+                // Chimney icon
+                rect!(x = 230, y = 110, w = 12, h = 20, color = COLOR_CHIMNEY);
+                circ!(x = 236, y = 108, d = 8, color = 0xffff00aa);
+            }
+            _ => {
+                // Step 4: Avoid Krampus
+                text!("WATCH OUT!", x = 88, y = 104, font = "medium", color = 0xff0000ff);
+                if show_text {
+                    text!("Krampus attacks if you miss!", x = 36, y = 120, font = "small", color = 0xffaa00ff);
+                }
+                // Timer remaining
+                let secs = self.tutorial_timer / 60;
+                text!("Tutorial: {}s", secs; x = 100, y = 136, font = "small", color = 0x888888ff);
+            }
+        }
+    }
+    
+    /// Button hints for title screen
+    fn draw_controls_hint(&self) {
+        // Control box
+        rect!(x = 8, y = 115, w = 120, h = 24, color = 0x00000088);
+        
+        // Arrow keys hint
+        rect!(x = 12, y = 120, w = 8, h = 14, color = 0x444444ff);
+        text!("^", x = 13, y = 118, font = "small", color = 0x00ff00ff);
+        text!("v", x = 13, y = 128, font = "small", color = 0x00ff00ff);
+        text!("Move", x = 24, y = 123, font = "small", color = 0xccccccff);
+        
+        // Enter key hint
+        rect!(x = 60, y = 120, w = 40, h = 14, color = 0x00aa00ff);
+        text!("ENTER", x = 64, y = 123, font = "small", color = 0xffffffff);
+        text!("Drop", x = 104, y = 123, font = "small", color = 0xccccccff);
+    }
+    
+    // ========================================================================
+    // MAIN UPDATE
+    // ========================================================================
+    
     pub fn update(&mut self) {
         self.frame += 1;
         
-        // Decrease screen flash
-        if self.screen_flash > 0 {
-            self.screen_flash -= 1;
-        }
+        // Decrease effects
+        if self.screen_flash > 0 { self.screen_flash -= 1; }
+        if self.screen_shake > 0 { self.screen_shake -= 1; }
         
-        // Decrease screen shake
-        if self.screen_shake > 0 {
-            self.screen_shake -= 1;
-        }
-        
-        // Update particles
+        // Update snowflakes always
         self.update_snowflakes();
-        self.update_score_popups();
         
-        // Update background music (keeps it looping)
-        self.update_music();
+        let (shake_x, shake_y) = self.get_shake();
         
-        self.tick_timer();
-        
-        // Get shake offset for all rendering
-        let (shake_x, shake_y) = self.get_shake_offset();
-
         match self.mode {
             // ================================================================
             // TITLE SCREEN
             // ================================================================
             MODE_TITLE => {
-                // Animated dark green background
-                let bg_pulse = ((self.frame as f32 / 30.0).sin() * 10.0) as u32;
-                clear(0x0f2f1fff + (bg_pulse << 8));
-                
-                // Draw snow on title screen too
+                self.draw_background(0, 0);
                 self.draw_snowflakes();
                 
-                // Christmas decorations
-                self.draw_christmas_decorations(0, 0);
+                // Title
+                text!("SANTA", x = 88, y = 30, font = "large", color = 0xff0000ff);
+                text!("DELIVERY", x = 72, y = 50, font = "large", color = 0x00aa00ff);
                 
-                // Title with shadow
-                text!("KRAMPUS", x = 82, y = 37, font = "large", color = 0x440000ff); // Shadow
-                text!("KRAMPUS", x = 80, y = 35, font = "large", color = 0xff4444ff);
+                // Sleigh preview
+                let preview_y = 80.0 + (self.frame as f32 / 20.0).sin() * 5.0;
+                let old_y = self.player_y;
+                self.player_y = preview_y;
+                self.draw_sleigh(0, 0);
+                self.player_y = old_y;
                 
-                text!("NIGHT", x = 98, y = 57, font = "large", color = 0x004400ff); // Shadow
-                text!("NIGHT", x = 96, y = 55, font = "large", color = 0x44ff44ff);
-                
-                // Blinking prompt
+                // Instructions
                 if (self.frame / 30) % 2 == 0 {
-                    text!("Press START to Play", x = 60, y = 90, font = "medium", color = 0xffffffff);
+                    text!("Press START to Fly!", x = 64, y = 100, font = "medium", color = 0xffffffff);
                 }
                 
-                // Controls hint
-                text!("D-Pad to Move", x = 80, y = 110, font = "small", color = 0x888888ff);
+                // Button hints
+                self.draw_controls_hint();
                 
-                // Flash "Collect Gifts, Avoid Traps!" text
-                if (self.frame / 60) % 2 == 0 {
-                    text!("Collect Gifts - Avoid Krampus!", x = 32, y = 125, font = "small", color = 0xffd700ff);
-                }
-                
-                // High score
                 if self.high_score > 0 {
-                    text!("Best: {}", self.high_score; x = 100, y = 138, font = "small", color = 0xffd700ff);
+                    text!("Best: {}", self.high_score; x = 100, y = 138, font = "small", color = COLOR_GOLD);
                 }
                 
                 let gp = gamepad::get(0);
                 if gp.start.just_pressed() || gp.a.just_pressed() {
-                    Self::play_sfx("start");
-                    self.start_round();
-                    self.play_mode_music();
+                    self.start_game();
                 }
             }
             
             // ================================================================
-            // JINGLE MODE (Good Vibes)
+            // DELIVERING MODE
             // ================================================================
-            MODE_JINGLE => {
-                // Cheerful background with gradient effect
-                clear(COLOR_JINGLE_BG);
+            MODE_DELIVERING => {
+                // Update game logic
+                self.update_scroll();
+                self.move_player();
+                self.update_chimneys();
+                self.drop_gift();
+                self.update_gifts();
+                self.check_krampus_trigger();
+                self.update_krampus_warning();
                 
-                // Draw decorations first (background layer)
-                self.draw_christmas_decorations(shake_x, shake_y);
-                
-                // Draw snow
+                // Draw
+                self.draw_background(shake_x, shake_y);
                 self.draw_snowflakes();
                 
-                self.move_player();
-                self.collect_gifts();
-                
-                // Check for round completion
-                if self.jingle_timer <= 0 {
-                    if self.all_gifts_collected() {
-                        // BONUS! Completed perfectly
-                        let bonus = 100 + (self.round * 25);
-                        self.score += bonus;
-                        self.add_score_popup(128.0, 60.0, bonus);
-                        self.round += 1;
-                        self.screen_flash = 12;
-                        self.flash_color = 0xffd700ff; // Gold flash
-                        self.screen_shake = 8;
-                        Self::play_sfx("bonus");
-                        self.start_round();
-                    } else {
-                        // Didn't collect all gifts - enter Hurry mode
-                        self.mode = MODE_HURRY;
-                        self.hurry_timer = (6 - (self.round as i32 / 3)).max(3);
-                        self.screen_flash = 10;
-                        self.flash_color = 0xffa500ff; // Orange flash
-                        self.screen_shake = 6;
-                        Self::play_sfx("hurry");
-                        self.play_mode_music();
-                    }
+                // Draw chimneys
+                for chimney in &self.chimneys {
+                    self.draw_chimney(chimney, shake_x, shake_y);
                 }
                 
-                // Draw traps (hidden/subtle in Jingle mode)
-                for i in 0..self.trap_count as usize {
-                    self.draw_trap(self.trap_x[i], self.trap_y[i], false, shake_x, shake_y);
-                }
-                
-                // Draw gifts
-                for (idx, gift) in self.gifts.iter().enumerate() {
-                    if !gift.collected {
-                        let pulse = ((self.frame as f32 / 10.0 + idx as f32).sin() * 2.0) as f32;
-                        self.draw_gift(gift.x, gift.y, pulse, shake_x, shake_y);
-                    }
-                }
-                
-                // Draw player
-                self.draw_player(shake_x, shake_y);
-            }
-
-            // ================================================================
-            // HURRY MODE (Tension)
-            // ================================================================
-            MODE_HURRY => {
-                // Flickering orange/brown background
-                let flicker = if (self.frame / 3) % 2 == 0 { 0x10 } else { 0x00 };
-                clear(COLOR_HURRY_BG + (flicker << 16));
-                
-                // Still draw snow but faster/more chaotic
-                self.draw_snowflakes();
-                
-                self.move_player();
-                self.collect_gifts();
-
-                // Check trap collision
-                if self.stepped_on_trap() {
-                    self.mode = MODE_KRAMPUS;
-                    self.krampus_timer = (10 - (self.round as i32 / 2)).max(5);
-                    self.krampus_x = if self.player_x > 128.0 { 20.0 } else { 236.0 };
-                    self.krampus_y = if self.player_y > 72.0 { 20.0 } else { 124.0 };
-                    self.screen_flash = 15;
-                    self.flash_color = 0xff0000ff;
-                    self.screen_shake = 12;
-                    Self::play_sfx("trap");
-                    self.play_mode_music();
-                } else if self.hurry_timer <= 0 {
-                    // Survived hurry mode without hitting trap!
-                    let bonus = 50 + (self.round * 10);
-                    self.score += bonus;
-                    self.add_score_popup(128.0, 60.0, bonus);
-                    self.round += 1;
-                    Self::play_sfx("bonus");
-                    self.start_round();
-                    self.play_mode_music();
-                }
-                
-                // Draw traps (visible and pulsing in Hurry mode!)
-                for i in 0..self.trap_count as usize {
-                    self.draw_trap(self.trap_x[i], self.trap_y[i], true, shake_x, shake_y);
-                }
-                
-                // Draw remaining gifts
+                // Draw falling gifts
                 for gift in &self.gifts {
-                    if !gift.collected {
-                        self.draw_gift(gift.x, gift.y, 0.0, shake_x, shake_y);
+                    if gift.active {
+                        self.draw_falling_gift(gift, shake_x, shake_y);
                     }
                 }
                 
-                // Draw player
-                self.draw_player(shake_x, shake_y);
+                // Draw sleigh
+                self.draw_sleigh(shake_x, shake_y);
                 
-                // Urgent warning text
-                if (self.frame / 10) % 2 == 0 {
-                    text!("WATCH OUT!", x = 88, y = 130, font = "small", color = 0xff6600ff);
+                // UI
+                self.draw_ui(shake_x, shake_y);
+                
+                // Tutorial overlay (first game only)
+                if self.tutorial_timer > 0 {
+                    self.tutorial_timer -= 1;
+                    self.draw_tutorial();
                 }
             }
-
+            
             // ================================================================
-            // KRAMPUS MODE (Horror)
+            // KRAMPUS ATTACK MODE
             // ================================================================
             MODE_KRAMPUS => {
-                // Dark, pulsing horror background
-                let pulse = ((self.frame as f32 / 15.0).sin() * 8.0) as u32;
-                clear(COLOR_KRAMPUS_BG + (pulse << 8));
-                
-                // Fog effect (dark circles at edges)
-                for i in 0..8 {
-                    let offset = (self.frame as f32 / 20.0 + i as f32).sin() * 10.0;
-                    circ!(x = (i * 35 - 10 + offset as i32) + shake_x, y = -5 + shake_y, d = 30, color = 0x00000088);
-                    circ!(x = (i * 35 - 10 - offset as i32) + shake_x, y = 149 + shake_y, d = 30, color = 0x00000088);
-                }
-                
+                // Update
+                self.update_scroll();
                 self.move_player();
                 self.update_krampus();
-
-                if self.krampus_timer <= 0 {
-                    // SURVIVED!
-                    let bonus = 150 + (self.round * 50);
-                    self.score += bonus;
-                    self.add_score_popup(128.0, 60.0, bonus);
-                    self.round += 1;
-                    self.screen_flash = 15;
-                    self.flash_color = 0x00ff00ff; // Green survival flash
-                    self.screen_shake = 10;
-                    Self::play_sfx("survive");
-                    self.start_round();
-                    self.play_mode_music();
+                self.update_projectiles();
+                
+                // Darker background during attack
+                clear(0x0a0a14ff);
+                
+                // Draw stars dimmed
+                for i in 0..10 {
+                    let star_x = ((i * 37 + 10) as f32 - (self.scroll_x * 0.1) % SCREEN_W) as i32;
+                    let star_y = (i * 7 % 50 + 5) as i32;
+                    circ!(x = star_x + shake_x, y = star_y + shake_y, d = 2, color = 0xffffff33);
                 }
                 
-                // Draw player first (Krampus renders on top for fear effect)
-                self.draw_player(shake_x, shake_y);
+                // Ground (darker)
+                rect!(x = shake_x, y = 120 + shake_y, w = 256, h = 30, color = 0x808090ff);
+                
+                self.draw_snowflakes();
+                
+                // Draw sleigh
+                self.draw_sleigh(shake_x, shake_y);
                 
                 // Draw Krampus
                 self.draw_krampus(shake_x, shake_y);
                 
-                // Warning text (more urgent)
-                if (self.frame / 8) % 2 == 0 {
-                    text!("RUN!", x = 112, y = 130, font = "large", color = 0xff0000ff);
+                // Draw projectiles
+                for proj in &self.projectiles {
+                    if proj.active {
+                        self.draw_projectile(proj, shake_x, shake_y);
+                    }
                 }
                 
-                // Timer urgency
-                if self.krampus_timer <= 3 && (self.frame / 15) % 2 == 0 {
-                    text!("ALMOST THERE!", x = 70, y = 60, font = "medium", color = 0x00ff00ff);
-                }
+                // UI
+                self.draw_ui(shake_x, shake_y);
+                
+                // Survive timer
+                let seconds_left = self.krampus_duration / 60;
+                text!("Survive: {}s", seconds_left; x = 100, y = 60, font = "medium", color = 0xff6600ff);
             }
-
+            
             // ================================================================
             // GAME OVER
             // ================================================================
             MODE_GAMEOVER => {
                 clear(0x0a0a0aff);
                 
-                // Dramatic red vignette
-                for i in 0..5 {
-                    let size = 300 - i * 30;
-                    let alpha = 0x11 * i as u32;
-                    rect!(x = 128 - size as i32 / 2, y = 72 - size as i32 / 2, w = size as u32, h = size as u32, color = (0x22000000 + alpha));
-                }
+                text!("GAME OVER", x = 72, y = 35, font = "large", color = 0xff0000ff);
                 
-                // Title with glitch effect
-                let glitch = if (self.frame / 30) % 5 == 0 { 2 } else { 0 };
-                text!("GAME OVER", x = 72 + glitch, y = 40, font = "large", color = 0xff0000ff);
+                text!("Score: {}", self.score; x = 92, y = 60, font = "medium", color = 0xffffffff);
+                text!("Deliveries: {}", self.deliveries; x = 80, y = 78, font = "small", color = 0x00ff00ff);
+                text!("Level: {}", self.level; x = 100, y = 92, font = "small", color = 0xaaaaaaff);
                 
-                text!("Score: {}", self.score; x = 90, y = 65, font = "medium", color = 0xffffffff);
-                text!("Round: {}", self.round; x = 98, y = 82, font = "small", color = 0xaaaaaaff);
-                
-                // New high score?
                 if self.score > self.high_score && self.score > 0 {
                     if (self.frame / 15) % 2 == 0 {
-                        text!("NEW HIGH SCORE!", x = 56, y = 100, font = "medium", color = 0xffd700ff);
+                        text!("NEW HIGH SCORE!", x = 60, y = 108, font = "medium", color = COLOR_GOLD);
                     }
                 }
                 
-                // Restart prompt
                 if (self.frame / 25) % 2 == 0 {
-                    text!("Press START to Retry", x = 56, y = 122, font = "small", color = 0x888888ff);
+                    text!("Press START to Retry", x = 56, y = 125, font = "small", color = 0x888888ff);
                 }
-
+                
                 let gp = gamepad::get(0);
                 if gp.start.just_pressed() || gp.a.just_pressed() {
-                    Self::play_sfx("start");
                     self.reset_game();
-                    self.play_mode_music();
                 }
             }
             
             _ => {}
         }
-
-        // ====================================================================
-        // UI OVERLAY (on top of everything except flash)
-        // ====================================================================
-        if self.mode != MODE_TITLE && self.mode != MODE_GAMEOVER {
-            // Score
-            text!("Score: {}", self.score; x = 4 + shake_x, y = 136 + shake_y, font = "small", color = 0xffffffff);
-            
-            // Round indicator with flair
-            rect!(x = 2 + shake_x, y = 2 + shake_y, w = 22, h = 10, color = 0x00000088);
-            text!("R{}", self.round; x = 4 + shake_x, y = 4 + shake_y, font = "small", color = 0xffd700ff);
-            
-            // Timer bar
-            self.draw_timer_bar(shake_x, shake_y);
-            
-            // Mode indicator
-            self.draw_mode_indicator(shake_x, shake_y);
-            
-            // Gifts remaining (in Jingle/Hurry)
-            if self.mode == MODE_JINGLE || self.mode == MODE_HURRY {
-                let remaining = self.gifts.iter().filter(|g| !g.collected).count();
-                text!("Gifts: {}", remaining; x = 180 + shake_x, y = 136 + shake_y, font = "small", color = 0x44ff44ff);
-            }
-        }
         
-        // Draw score popups (always on top)
-        self.draw_score_popups();
-        
-        // ====================================================================
-        // SCREEN FLASH EFFECT (very top layer)
-        // ====================================================================
+        // Screen flash overlay
         if self.screen_flash > 0 {
-            let alpha = ((self.screen_flash as f32 / 20.0) * 200.0) as u32;
+            let alpha = ((self.screen_flash as f32 / 15.0) * 180.0) as u32;
             let flash = (self.flash_color & 0xffffff00) | alpha;
             rect!(x = 0, y = 0, w = 256, h = 144, color = flash);
         }
