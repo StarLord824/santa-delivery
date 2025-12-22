@@ -300,6 +300,10 @@ impl GameState {
         
         self.screen_flash = 8;
         self.flash_color = 0xffffffff;
+        
+        // Start game music
+        self.play_mode_music();
+        Self::play_sfx("start");
     }
     
     fn reset_game(&mut self) {
@@ -424,6 +428,9 @@ impl GameState {
             // Visual feedback that gift was dropped
             self.screen_flash = 2;
             self.flash_color = 0xffffff44;
+            
+            // Drop sound
+            Self::play_sfx("drop");
         }
     }
     
@@ -484,6 +491,8 @@ impl GameState {
             self.flash_color = 0x00ff00ff;
             // Reduce naughty meter on successful delivery
             self.naughty_meter = self.naughty_meter.saturating_sub(10);
+            // Success sound
+            Self::play_sfx("delivery");
         }
         
         // Clean up inactive gifts
@@ -504,6 +513,9 @@ impl GameState {
             // Start warning countdown
             self.krampus_warning = 120; // 2 seconds warning
             self.screen_shake = 10;
+            
+            // Warning sound
+            Self::play_sfx("warning");
         }
     }
     
@@ -521,6 +533,10 @@ impl GameState {
                 self.screen_flash = 15;
                 self.flash_color = 0xff0000ff;
                 self.screen_shake = 15;
+                
+                // Krampus attack music and sound
+                self.play_mode_music();
+                Self::play_sfx("krampus");
             }
         }
     }
@@ -561,6 +577,10 @@ impl GameState {
             self.screen_flash = 10;
             self.flash_color = 0x00ff00ff;
             self.screen_shake = 5;
+            
+            // Back to normal music + victory sound
+            self.play_mode_music();
+            Self::play_sfx("survive");
         }
     }
     
@@ -647,10 +667,17 @@ impl GameState {
             self.screen_shake = 12;
             self.invincible_timer = 90; // 1.5 seconds of invincibility
             
+            // Hit sound
+            Self::play_sfx("hit");
+            
             if self.health == 0 {
                 self.mode = MODE_GAMEOVER;
                 self.screen_shake = 25;
                 self.invincible_timer = 0;
+                
+                // Game over music and sound
+                self.play_mode_music();
+                Self::play_sfx("gameover");
             }
         }
         
@@ -1088,6 +1115,9 @@ impl GameState {
         
         // Update snowflakes always
         self.update_snowflakes();
+        
+        // Keep music playing (auto-loop)
+        self.update_music();
         
         let (shake_x, shake_y) = self.get_shake();
         

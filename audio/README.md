@@ -1,62 +1,52 @@
-# 🎵 Audio Files Required
+# 🎵 Santa Delivery - Audio Files
 
-Place these audio files in the `audio/` folder. Supported formats: `.wav`, `.ogg`, `.mp3`, `.flac`
+This directory should contain the audio files for the game.
+Place `.wav` or `.ogg` files here with the names listed below.
 
-## Background Music (Looping)
+## 🎼 Background Music (Looping)
 
-| Filename | Description | Style |
-|----------|-------------|-------|
-| `title_bgm.wav` | Title screen music | Cheerful Christmas jingle |
-| `jingle_bgm.wav` | Main gameplay (Jingle mode) | Upbeat chiptune Christmas |
-| `hurry_bgm.wav` | Hurry mode music | Faster, tense version |
-| `krampus_bgm.wav` | Krampus chase music | Dark, scary, intense |
+| Filename | When Played | Suggested Style |
+|----------|-------------|-----------------|
+| `title_music.wav` | Title screen | Calm, festive chiptune |
+| `game_music.wav` | Delivering mode | Upbeat, Christmas jingle |
+| `krampus_music.wav` | Krampus attack | Intense, dark, urgent |
+| `gameover_music.wav` | Game over screen | Sad, short melody |
 
-## Sound Effects (One-shot)
+## 🔊 Sound Effects (One-shot)
 
-| Filename | Description | Style |
-|----------|-------------|-------|
-| `start.wav` | Game start / restart | Short jingle or chime |
-| `pickup.wav` | Gift collected | Happy "ding" or coin sound |
-| `bonus.wav` | Round complete bonus | Triumphant fanfare |
-| `hurry.wav` | Entering Hurry mode | Warning alarm |
-| `trap.wav` | Stepped on trap | Scary stinger |
-| `survive.wav` | Survived Krampus | Relief sound, victory |
-| `gameover.wav` | Caught by Krampus | Death/failure sound |
+| Filename | When Played | Suggested Style |
+|----------|-------------|-----------------|
+| `start.wav` | Game starts | Whoosh / chime |
+| `drop.wav` | Gift dropped | Soft "thump" / pop |
+| `delivery.wav` | Gift lands in chimney | Success chime / "ding!" |
+| `warning.wav` | Krampus is coming | Alarm / growl |
+| `krampus.wav` | Krampus appears | Evil laugh / roar |
+| `hit.wav` | Player hit by projectile | Impact / pain |
+| `survive.wav` | Survived Krampus | Triumphant fanfare |
+| `gameover.wav` | Game over | Crash / sad tone |
 
----
+## 📥 Free Audio Resources
 
-## 🆓 Free Chiptune Resources
+### Chiptune Music
+- [OpenGameArt - Christmas](https://opengameart.org/art-search-advanced?keys=christmas&field_art_type_tid%5B%5D=13)
+- [Incompetech](https://incompetech.com/music/royalty-free/music.html)
+- [Free Music Archive](https://freemusicarchive.org/)
 
-### OpenGameArt.org (Recommended)
-- https://opengameart.org/art-search-advanced?keys=christmas&field_art_type_tid%5B%5D=13
-- https://opengameart.org/content/8-bit-chiptune-jingles
-
-### Freesound.org
-- https://freesound.org/search/?q=8bit+christmas
-- https://freesound.org/search/?q=chiptune+sfx
-
-### itch.io (Chiptune Packs)
-- https://tallbeard.itch.io/music-loop-bundle
-- Search "chiptune Christmas" on itch.io
+### Sound Effects
+- [Freesound](https://freesound.org/search/?q=8bit)
+- [SFXR](https://sfxr.me/) - Generate retro sounds
+- [BFXR](https://www.bfxr.net/) - Advanced retro sound maker
+- [OpenGameArt SFX](https://opengameart.org/art-search?keys=&field_art_type_tid%5B%5D=12)
 
 ### AI Generation
-- Use Suno.ai or similar to generate custom chiptune Christmas music
-- Request "8-bit retro Christmas arcade game music"
+- [Suno AI](https://suno.ai/) - AI-generated music
+- [Stable Audio](https://stableaudio.com/) - AI sound generation
 
----
+## ⚠️ Notes
 
-## 🔧 Quick Test Without Audio
+1. **File Format**: Use `.wav` for best compatibility (`.ogg` also works)
+2. **Duration**: Music should be 30-60 seconds for easy looping
+3. **Volume**: Normalize all files to similar volume levels
+4. **Bit Rate**: 16-bit, 44.1kHz is ideal for chiptune
 
-The game will run fine without audio files - it will just be silent.
-Audio functions gracefully handle missing files.
-
----
-
-## ⚡ Quick Setup (Using Freesound)
-
-1. Go to https://freesound.org
-2. Search for each sound type
-3. Download WAV format
-4. Rename to match the filenames above
-5. Place in `audio/` folder
-6. Restart `turbo run -w`
+## 🎮 The game will run silently if audio files are missing!
