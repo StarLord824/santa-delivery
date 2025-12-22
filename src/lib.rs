@@ -2,49 +2,14 @@ use turbo::*;
 
 // ============================================================================
 // STRUCTS
-// ============================================================================
 
-/// A chimney target where Santa needs to drop gifts
-#[turbo::serialize]
-struct Chimney {
-    x: f32,        // World X position (scrolls left)
-    y: f32,        // Fixed Y position (height)
-    delivered: bool,
-    style: u8,     // House style (0-2 for variation)
-}
+mod types;
+use types::*;
 
-/// A gift that's been dropped and is falling
-#[turbo::serialize]
-struct FallingGift {
-    x: f32,
-    y: f32,
-    vel_y: f32,    // Falling velocity
-    target_chimney: usize, // Which chimney this is aimed at
-    active: bool,
-}
+// STRUCTS
+// Defined in types.rs
 
-/// Krampus projectile
-#[turbo::serialize]
-struct Projectile {
-    x: f32,
-    y: f32,
-    vel_x: f32,
-    vel_y: f32,
-    active: bool,
-}
-
-/// Snowflake for atmosphere
-#[turbo::serialize]
-struct Snowflake {
-    x: f32,
-    y: f32,
-    speed: f32,
-    size: u32,
-}
-
-// ============================================================================
 // GAME STATE
-// ============================================================================
 
 #[turbo::game]
 struct GameState {
@@ -103,32 +68,10 @@ struct GameState {
 }
 
 // Game mode constants
-const MODE_TITLE: u8 = 0;
-const MODE_DELIVERING: u8 = 1;
-const MODE_KRAMPUS: u8 = 2;
-const MODE_GAMEOVER: u8 = 3;
+
 
 // Screen dimensions (larger for better resolution)
-const SCREEN_W: f32 = 384.0;
-const SCREEN_H: f32 = 216.0;
-
-// Player constants
-const PLAYER_X: f32 = 60.0;  // Fixed X position (adjusted for larger screen)
-const PLAYER_SPEED: f32 = 3.0;
-
-// Base colors
-const COLOR_SNOW: u32 = 0xf0f8ffff;
-const COLOR_CHIMNEY: u32 = 0x8b4513ff;
-const COLOR_GOLD: u32 = 0xffd700ff;
-
-// Level-based sky colors (environment changes)
-const SKY_COLORS: [u32; 5] = [
-    0x1a2744ff,  // Level 1: Deep night
-    0x0f1f3aff,  // Level 2: Darker midnight
-    0x2a1a44ff,  // Level 3: Purple twilight
-    0x0a1020ff,  // Level 4: Near black
-    0x1a0a2aff,  // Level 5+: Dark purple
-];
+// Constants imported from types.rs
 
 impl GameState {
     pub fn new() -> Self {
@@ -201,14 +144,14 @@ impl GameState {
     /// Play background music based on current game mode
     fn play_mode_music(&self) {
         // Stop all music tracks first
-        audio::stop("title");
+        audio::stop("start");
         audio::stop("game");
         audio::stop("krampus");
         audio::stop("game_over");
         
         // Play appropriate track for current mode
         match self.mode {
-            MODE_TITLE => audio::play("title"),
+            MODE_TITLE => audio::play("start"),
             MODE_DELIVERING => audio::play("game"),
             MODE_KRAMPUS => audio::play("krampus"),
             MODE_GAMEOVER => audio::play("game_over"),
@@ -220,8 +163,8 @@ impl GameState {
     fn update_music(&self) {
         match self.mode {
             MODE_TITLE => {
-                if !audio::is_playing("title") {
-                    audio::play("title");
+                if !audio::is_playing("start") {
+                    audio::play("start");
                 }
             }
             MODE_DELIVERING => {
@@ -302,7 +245,6 @@ impl GameState {
         
         // Start game music
         self.play_mode_music();
-        Self::play_sfx("start_g");
     }
     
     fn reset_game(&mut self) {
@@ -467,6 +409,7 @@ impl GameState {
                         gift.active = false;
                         score_gained += 100 + self.level * 10;
                         deliveries_made += 1;
+                        Self::play_sfx("delivery");
                         
                         // Mark chimney as delivered
                         if i < self.chimneys.len() {
@@ -679,7 +622,7 @@ impl GameState {
                 
                 // Game over music and sound
                 self.play_mode_music();
-                Self::play_sfx("gameover");
+                Self::play_sfx("game-over");
             }
         }
         
@@ -1315,18 +1258,19 @@ impl GameState {
     /// Button hints for title screen
     fn draw_controls_hint(&self) {
         // Control box (centered at bottom for larger screen)
-        rect!(x = 120, y = 185, w = 145, h = 26, color = 0x00000088);
+        // Made wider and opaque for visibility against snow
+        rect!(x = 100, y = 185, w = 184, h = 26, color = 0x222222ff);
         
         // Arrow keys hint
-        rect!(x = 125, y = 190, w = 10, h = 16, color = 0x444444ff);
-        text!("^", x = 127, y = 188, font = "small", color = 0x00ff00ff);
-        text!("v", x = 127, y = 198, font = "small", color = 0x00ff00ff);
-        text!("Move", x = 140, y = 194, font = "small", color = 0xccccccff);
+        rect!(x = 110, y = 190, w = 10, h = 16, color = 0x444444ff);
+        text!("^", x = 112, y = 188, font = "small", color = 0x00ff00ff);
+        text!("v", x = 112, y = 198, font = "small", color = 0x00ff00ff);
+        text!("Move", x = 125, y = 194, font = "small", color = 0xffffffff);
         
         // Enter key hint
         rect!(x = 180, y = 190, w = 45, h = 16, color = 0x00aa00ff);
         text!("ENTER", x = 185, y = 194, font = "small", color = 0xffffffff);
-        text!("Drop", x = 230, y = 194, font = "small", color = 0xccccccff);
+        text!("Drop", x = 230, y = 194, font = "small", color = 0xffffffff);
     }
     
     // ========================================================================
@@ -1360,8 +1304,15 @@ impl GameState {
                 rect!(x = 100, y = 40, w = 184, h = 60, color = 0x00000088);
                 
                 // Title (centered for 384 width)
-                text!("SANTA", x = 140, y = 50, font = "large", color = 0xff0000ff);
-                text!("DELIVERY", x = 124, y = 75, font = "large", color = 0x00aa00ff);
+                // Title (Refined single line without artifacts)
+                // Title (Refined single line without artifacts)
+                // Shadow
+                text!("SANTA", x = 82, y = 62, font = "large", color = 0x000000ff);
+                text!("DELIVERY", x = 162, y = 62, font = "large", color = 0x000000ff);
+                
+                // Main text
+                text!("SANTA", x = 80, y = 60, font = "large", color = 0xff0000ff);
+                text!("DELIVERY", x = 160, y = 60, font = "large", color = COLOR_GOLD);
                 
                 // Sleigh preview (centered)
                 let preview_y = 120.0 + (self.frame as f32 / 20.0).sin() * 8.0;
@@ -1395,9 +1346,14 @@ impl GameState {
                 }
                 
                 // Exit game with ESC (note: in browser this may just unfocus)
+                // Exit game with ESC
                 if kb.escape().just_pressed() {
-                    // In Turbo, we can't truly exit, but we can show a message
-                    // For now, we'll just acknowledge it
+                    std::process::exit(0);
+                }
+                
+                if gp.start.just_pressed() || kb.enter().just_pressed() {
+                    Self::play_sfx("start"); // Play sound immediately
+                    self.start_game();
                 }
             }
             
@@ -1464,7 +1420,9 @@ impl GameState {
                 }
                 
                 // Ground (darker)
-                rect!(x = shake_x, y = 120 + shake_y, w = 256, h = 30, color = 0x808090ff);
+                // Ground (darker for Krampus mode, full width)
+                let ground_y = (SCREEN_H * 0.78) as i32;
+                rect!(x = shake_x, y = ground_y + shake_y, w = SCREEN_W as u32, h = 50, color = 0x404050ff);
                 
                 self.draw_snowflakes();
                 
