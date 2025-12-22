@@ -1,29 +1,28 @@
 use turbo::*;
 
-// ============================================================================
-// STRUCTS
+// MODULES
 
 mod types;
+mod sound;
+
 use types::*;
 
-// STRUCTS
-// Defined in types.rs
-
-// GAME STATE
 
 #[turbo::game]
 struct GameState {
     frame: u32,
-    mode: u8,  // 0=Title, 1=Delivering, 2=KrampusAttack, 3=GameOver
+    mode: u8,  // 0=Title, 1=Delivering, 2=KrampusAttack, 3=GameOver, 4=Paused
+    previous_mode: u8,  // For pause/resume
     
     // Scrolling
     scroll_x: f32,
     scroll_speed: f32,
+    base_scroll_speed: f32,  // For progressive difficulty
     
     // Player (Santa's sleigh)
     player_y: f32,
     player_vel_y: f32,
-    sleigh_tilt: f32,  // Visual tilt when moving
+    sleigh_tilt: f32,
     
     // Chimneys (delivery targets)
     chimneys: Vec<Chimney>,
@@ -39,7 +38,7 @@ struct GameState {
     krampus_attack_timer: u32,
     krampus_duration: u32,
     projectiles: Vec<Projectile>,
-    krampus_warning: u32,  // Countdown before attack
+    krampus_warning: u32,
     
     // Stats
     health: u32,
@@ -49,19 +48,38 @@ struct GameState {
     naughty_meter: u32,
     level: u32,
     
+    // Combo system
+    combo_count: u32,
+    combo_timer: u32,  // Frames until combo resets
+    max_combo: u32,
+    
     // Visual effects
     screen_flash: u32,
     flash_color: u32,
     screen_shake: u32,
-    invincible_timer: u32,  // Invincibility frames after damage
+    invincible_timer: u32,
+    
+    // Screen transitions
+    fade_alpha: u32,      // 0-255 for fade effect
+    fade_direction: i32,  // 1 = fading in, -1 = fading out, 0 = none
     
     // Particles
     snowflakes: Vec<Snowflake>,
+    particles: Vec<Particle>,
+    
+    // Power-ups
+    powerups: Vec<PowerUp>,
+    powerup_spawn_timer: u32,
+    star_power_timer: u32,  // Invincibility from star power-up
     
     // Tutorial
-    tutorial_timer: u32,   // Counts down during tutorial
-    first_play: bool,      // True if this is first game
-    tutorial_step: u8,     // Which hint to show
+    tutorial_timer: u32,
+    first_play: bool,
+    tutorial_step: u8,
+    
+    // Audio settings
+    music_volume: f32,  // 0.0 to 1.0
+    sfx_volume: f32,    // 0.0 to 1.0
     
     // RNG
     rng_seed: u32,
@@ -78,9 +96,11 @@ impl GameState {
         let mut state = Self {
             frame: 0,
             mode: MODE_TITLE,
+            previous_mode: MODE_TITLE,
             
             scroll_x: 0.0,
             scroll_speed: 1.5,
+            base_scroll_speed: 1.5,
             
             player_y: SCREEN_H / 2.0,
             player_vel_y: 0.0,
@@ -94,7 +114,7 @@ impl GameState {
             krampus_x: SCREEN_W + 50.0,
             krampus_y: SCREEN_H / 2.0,
             krampus_active: false,
-            krampus_attack_timer: 1200, // 20 seconds before first Krampus
+            krampus_attack_timer: 1200,
             krampus_duration: 0,
             projectiles: vec![],
             krampus_warning: 0,
@@ -106,26 +126,47 @@ impl GameState {
             naughty_meter: 0,
             level: 1,
             
+            // Combo system
+            combo_count: 0,
+            combo_timer: 0,
+            max_combo: 0,
+            
+            // Visual effects
             screen_flash: 0,
             flash_color: 0xffffffff,
             screen_shake: 0,
             invincible_timer: 0,
             
-            snowflakes: vec![],
+            // Screen transitions
+            fade_alpha: 255,
+            fade_direction: 1,  // Fade in on start
             
+            // Particles
+            snowflakes: vec![],
+            particles: vec![],
+            
+            // Power-ups
+            powerups: vec![],
+            powerup_spawn_timer: 600,  // First power-up after 10 seconds
+            star_power_timer: 0,
+            
+            // Tutorial
             tutorial_timer: 0,
             first_play: true,
             tutorial_step: 0,
             
+            // Audio settings (default full volume)
+            music_volume: 1.0,
+            sfx_volume: 1.0,
+            
             rng_seed: 42,
         };
         state.init_snowflakes();
+        state.load_high_score();
         state
     }
     
-    // ========================================================================
     // RANDOM
-    // ========================================================================
     
     fn random(&mut self) -> u32 {
         self.rng_seed = self.rng_seed.wrapping_mul(1103515245).wrapping_add(12345);
@@ -137,9 +178,7 @@ impl GameState {
         min + r * (max - min)
     }
     
-    // ========================================================================
     // AUDIO SYSTEM
-    // ========================================================================
     
     /// Play background music based on current game mode
     fn play_mode_music(&self) {
@@ -191,9 +230,7 @@ impl GameState {
         audio::play(name);
     }
     
-    // ========================================================================
     // INITIALIZATION
-    // ========================================================================
     
     fn init_snowflakes(&mut self) {
         self.snowflakes.clear();
@@ -211,6 +248,7 @@ impl GameState {
         self.mode = MODE_DELIVERING;
         self.scroll_x = 0.0;
         self.scroll_speed = 1.5;
+        self.base_scroll_speed = 1.5;
         self.player_y = SCREEN_H / 2.0;
         self.player_vel_y = 0.0;
         self.sleigh_tilt = 0.0;
@@ -219,9 +257,11 @@ impl GameState {
         self.next_chimney_spawn = 150.0;
         self.gifts.clear();
         self.projectiles.clear();
+        self.particles.clear();
+        self.powerups.clear();
         
         self.krampus_active = false;
-        self.krampus_attack_timer = 1200; // 20 seconds before first Krampus
+        self.krampus_attack_timer = 1200;
         self.krampus_warning = 0;
         self.krampus_duration = 0;
         
@@ -231,10 +271,22 @@ impl GameState {
         self.naughty_meter = 0;
         self.level = 1;
         self.invincible_timer = 0;
+        self.star_power_timer = 0;
         
-        // Tutorial: 10 seconds on first play
+        // Combo system
+        self.combo_count = 0;
+        self.combo_timer = 0;
+        self.max_combo = 0;
+        
+        // Power-ups
+        self.powerup_spawn_timer = 600;
+        
+        // Screen transition (fade in)
+        self.start_fade_in();
+        
+        // Tutorial
         if self.first_play {
-            self.tutorial_timer = 600; // 10 seconds at 60fps
+            self.tutorial_timer = 600;
             self.tutorial_step = 0;
         } else {
             self.tutorial_timer = 0;
@@ -250,9 +302,262 @@ impl GameState {
     fn reset_game(&mut self) {
         if self.score > self.high_score {
             self.high_score = self.score;
+            self.save_high_score();
         }
-        self.first_play = false; // No more tutorial after first game
+        self.first_play = false;
         self.start_game();
+    }
+    
+    // ========================================================================
+    // HIGH SCORE PERSISTENCE
+    // ========================================================================
+    
+    fn load_high_score(&mut self) {
+        // Try to load high score from local storage
+        if let Ok(data) = local::load() {
+            if data.len() >= 4 {
+                self.high_score = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+            }
+        }
+    }
+    
+    fn save_high_score(&self) {
+        let bytes = self.high_score.to_le_bytes();
+        let _ = local::save(&bytes);
+    }
+    
+    // ========================================================================
+    // PARTICLE SYSTEM
+    // ========================================================================
+    
+    fn spawn_particles(&mut self, x: f32, y: f32, count: u32, colors: &[u32]) {
+        // Pre-generate random values to avoid borrow conflicts
+        let mut particle_data: Vec<(f32, f32, u32, u32)> = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let angle = self.random_range(0.0, 6.28);
+            let speed = self.random_range(1.0, 4.0);
+            let life = self.random() % 30 + 20;
+            let size = self.random() % 3 + 2;
+            particle_data.push((angle, speed, life, size));
+        }
+        
+        for (i, (angle, speed, life, size)) in particle_data.into_iter().enumerate() {
+            let color_idx = i % colors.len();
+            self.particles.push(Particle {
+                x,
+                y,
+                vel_x: angle.cos() * speed,
+                vel_y: angle.sin() * speed - 2.0,
+                life,
+                color: colors[color_idx],
+                size,
+            });
+        }
+    }
+    
+    fn spawn_delivery_particles(&mut self, x: f32, y: f32) {
+        // Confetti colors for successful delivery
+        let colors = [COLOR_GOLD, 0xff4444ff, 0x44ff44ff, 0x4444ffff, 0xff44ffff];
+        self.spawn_particles(x, y, 15, &colors);
+    }
+    
+    fn spawn_star_particles(&mut self, x: f32, y: f32) {
+        // Golden star particles
+        let colors = [COLOR_GOLD, COLOR_STAR, 0xffffaaff];
+        self.spawn_particles(x, y, 10, &colors);
+    }
+    
+    fn update_particles(&mut self) {
+        for particle in self.particles.iter_mut() {
+            particle.x += particle.vel_x;
+            particle.y += particle.vel_y;
+            particle.vel_y += 0.15;  // Gravity
+            if particle.life > 0 {
+                particle.life -= 1;
+            }
+        }
+        self.particles.retain(|p| p.life > 0);
+    }
+    
+    // ========================================================================
+    // POWER-UP SYSTEM
+    // ========================================================================
+    
+    fn spawn_powerup(&mut self) {
+        let kind = if self.random() % 3 == 0 { POWERUP_INVINCIBLE } else { POWERUP_HEALTH };
+        let y = self.random_range(40.0, SCREEN_H * 0.6);
+        let bob_offset = self.random_range(0.0, 6.28);
+        self.powerups.push(PowerUp {
+            x: SCREEN_W + 20.0,
+            y,
+            kind,
+            active: true,
+            bob_offset,
+        });
+    }
+    
+    fn update_powerups(&mut self) {
+        // Spawn timer
+        if self.powerup_spawn_timer > 0 {
+            self.powerup_spawn_timer -= 1;
+        } else {
+            self.spawn_powerup();
+            self.powerup_spawn_timer = 900 + self.random() % 600;
+        }
+        
+        // Collect collision data first to avoid borrow conflicts
+        let mut collected: Vec<(f32, f32, u8)> = Vec::new();
+        let player_y = self.player_y;
+        let scroll_speed = self.scroll_speed;
+        
+        for powerup in self.powerups.iter_mut() {
+            powerup.x -= scroll_speed;
+            powerup.bob_offset += 0.1;
+            
+            let bob_y = powerup.y + (powerup.bob_offset.sin() * 5.0);
+            let dx = (PLAYER_X - powerup.x).abs();
+            let dy = (player_y - bob_y).abs();
+            
+            if dx < 25.0 && dy < 20.0 && powerup.active {
+                powerup.active = false;
+                collected.push((powerup.x, bob_y, powerup.kind));
+            }
+        }
+        
+        // Now process collected power-ups
+        for (x, y, kind) in collected {
+            self.spawn_star_particles(x, y);
+            match kind {
+                POWERUP_HEALTH => {
+                    self.health = (self.health + 1).min(5);
+                    Self::play_sfx("delivery");
+                }
+                POWERUP_INVINCIBLE => {
+                    self.star_power_timer = 300;
+                    Self::play_sfx("survive");
+                }
+                _ => {}
+            }
+        }
+        
+        // Remove off-screen or collected power-ups
+        self.powerups.retain(|p| p.x > -30.0 && p.active);
+        
+        // Update star power timer
+        if self.star_power_timer > 0 {
+            self.star_power_timer -= 1;
+        }
+    }
+    
+    // ========================================================================
+    // COMBO SYSTEM
+    // ========================================================================
+    
+    fn add_combo(&mut self) {
+        self.combo_count += 1;
+        self.combo_timer = 180;  // 3 seconds to maintain combo
+        if self.combo_count > self.max_combo {
+            self.max_combo = self.combo_count;
+        }
+        
+        // Bonus points for combos
+        let bonus = match self.combo_count {
+            2 => 50,
+            3 => 100,
+            4 => 200,
+            5..=9 => 300,
+            _ => 500,
+        };
+        self.score += bonus;
+    }
+    
+    fn update_combo(&mut self) {
+        if self.combo_timer > 0 {
+            self.combo_timer -= 1;
+        } else if self.combo_count > 0 {
+            self.combo_count = 0;
+        }
+    }
+    
+    fn break_combo(&mut self) {
+        self.combo_count = 0;
+        self.combo_timer = 0;
+    }
+    
+    // ========================================================================
+    // PROGRESSIVE DIFFICULTY
+    // ========================================================================
+    
+    fn update_difficulty(&mut self) {
+        // Increase scroll speed based on level
+        self.scroll_speed = self.base_scroll_speed + (self.level as f32 - 1.0) * 0.2;
+        
+        // Cap at reasonable speed
+        self.scroll_speed = self.scroll_speed.min(3.5);
+    }
+    
+    fn level_up(&mut self) {
+        self.level += 1;
+        self.update_difficulty();
+        
+        // Level up effects
+        self.screen_flash = 15;
+        self.flash_color = COLOR_GOLD;
+        Self::play_sfx("survive");  // Jingle for level up
+        
+        // Spawn celebration particles
+        self.spawn_particles(SCREEN_W / 2.0, SCREEN_H / 2.0, 25, &[COLOR_GOLD, 0xffffffff, 0xff4444ff]);
+    }
+    
+    // ========================================================================
+    // SCREEN TRANSITIONS
+    // ========================================================================
+    
+    fn update_fade(&mut self) {
+        match self.fade_direction {
+            1 => {  // Fading in (alpha decreasing)
+                if self.fade_alpha > 8 {
+                    self.fade_alpha -= 8;
+                } else {
+                    self.fade_alpha = 0;
+                    self.fade_direction = 0;
+                }
+            }
+            -1 => {  // Fading out (alpha increasing)
+                if self.fade_alpha < 247 {
+                    self.fade_alpha += 8;
+                } else {
+                    self.fade_alpha = 255;
+                    self.fade_direction = 0;
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    fn start_fade_out(&mut self) {
+        self.fade_direction = -1;
+    }
+    
+    fn start_fade_in(&mut self) {
+        self.fade_alpha = 255;
+        self.fade_direction = 1;
+    }
+    
+    // ========================================================================
+    // PAUSE SYSTEM
+    // ========================================================================
+    
+    fn toggle_pause(&mut self) {
+        if self.mode == MODE_PAUSED {
+            self.mode = self.previous_mode;
+            self.play_mode_music();
+        } else if self.mode == MODE_DELIVERING || self.mode == MODE_KRAMPUS {
+            self.previous_mode = self.mode;
+            self.mode = MODE_PAUSED;
+            audio::stop("game");
+            audio::stop("krampus");
+        }
     }
     
     // ========================================================================
@@ -278,10 +583,8 @@ impl GameState {
         self.player_y = self.player_y.clamp(20.0, SCREEN_H - 30.0);
     }
     
-    // ========================================================================
     // CHIMNEY SYSTEM
-    // ========================================================================
-    
+        
     fn spawn_chimney(&mut self) {
         // Spawn chimneys on the ground (78% of screen height)
         let ground_y = SCREEN_H * 0.78;
@@ -330,9 +633,9 @@ impl GameState {
         }
     }
     
-    // ========================================================================
+    
     // GIFT DROPPING
-    // ========================================================================
+    
     
     fn drop_gift(&mut self) {
         let gp = gamepad::get(0);
@@ -382,6 +685,7 @@ impl GameState {
         let scroll_speed = self.scroll_speed;
         let mut score_gained = 0u32;
         let mut deliveries_made = 0u32;
+        let mut delivery_positions: Vec<(f32, f32)> = Vec::new();  // For particles
         
         // Get chimney positions for collision
         let chimney_data: Vec<(f32, f32, bool)> = self.chimneys
@@ -392,10 +696,10 @@ impl GameState {
         for gift in &mut self.gifts {
             if !gift.active { continue; }
             
-            // Gift falls with arc (moves with scroll + falls)
+            // Gift falls with arc
             gift.x -= scroll_speed * 0.3;
             gift.y += gift.vel_y;
-            gift.vel_y += 0.15; // Gravity
+            gift.vel_y += 0.15;
             
             // Check collision with chimneys
             for (i, &(cx, cy, delivered)) in chimney_data.iter().enumerate() {
@@ -403,13 +707,12 @@ impl GameState {
                     let dx = gift.x - cx;
                     let dy = gift.y - cy;
                     
-                    // GENEROUS hitbox for easier gameplay (25x30 area)
-                    // Gift must be close horizontally and near/past chimney vertically
+                    // GENEROUS hitbox
                     if dx.abs() < 25.0 && dy > -10.0 && dy < 30.0 {
                         gift.active = false;
                         score_gained += 100 + self.level * 10;
                         deliveries_made += 1;
-                        Self::play_sfx("delivery");
+                        delivery_positions.push((cx, cy));
                         
                         // Mark chimney as delivered
                         if i < self.chimneys.len() {
@@ -426,27 +729,48 @@ impl GameState {
             }
         }
         
+        // Check for any gifts that fell off screen (missed)
+        let had_missed = self.gifts.iter().any(|g| !g.active && g.y > SCREEN_H);
+        
         // Apply score and deliveries
         self.score += score_gained;
         self.deliveries += deliveries_made;
         
-        // Flash on delivery
+        // Break combo if missed
+        if had_missed {
+            self.break_combo();
+        }
+        
+        // Effects on delivery
         if deliveries_made > 0 {
             self.screen_flash = 4;
             self.flash_color = 0x00ff00ff;
-            // Reduce naughty meter on successful delivery
             self.naughty_meter = self.naughty_meter.saturating_sub(10);
-            // Success sound
             Self::play_sfx("delivery");
+            
+            // Add combo for each delivery
+            for _ in 0..deliveries_made {
+                self.add_combo();
+            }
+            
+            // Spawn particles at delivery locations
+            for (x, y) in delivery_positions {
+                self.spawn_delivery_particles(x, y);
+            }
+            
+            // Level up every 5 deliveries
+            if self.deliveries % 5 == 0 && self.deliveries > 0 {
+                self.level_up();
+            }
         }
         
         // Clean up inactive gifts
         self.gifts.retain(|g| g.active);
     }
     
-    // ========================================================================
+    
     // KRAMPUS SYSTEM
-    // ========================================================================
+    
     
     fn check_krampus_trigger(&mut self) {
         if self.krampus_active || self.krampus_warning > 0 { return; }
@@ -634,9 +958,9 @@ impl GameState {
         self.projectiles.retain(|p| p.active);
     }
     
-    // ========================================================================
+    
     // SCROLLING & PARALLAX
-    // ========================================================================
+    
     
     fn update_scroll(&mut self) {
         self.scroll_x += self.scroll_speed;
@@ -665,9 +989,9 @@ impl GameState {
         }
     }
     
-    // ========================================================================
+    
     // GET SHAKE OFFSET
-    // ========================================================================
+    
     
     fn get_shake(&self) -> (i32, i32) {
         if self.screen_shake > 0 {
@@ -680,9 +1004,9 @@ impl GameState {
         }
     }
     
-    // ========================================================================
+    
     // DRAWING
-    // ========================================================================
+    
     
     fn draw_background(&self, shake_x: i32, shake_y: i32) {
         // Level-based sky color
@@ -745,9 +1069,11 @@ impl GameState {
         }
         
         // Pine trees with VARIATION (3 different styles)
-        let tree_offset = (self.scroll_x * 0.5) as i32 % 120;
-        for i in 0..8 {
-            let tx = i * 70 - tree_offset + shake_x + 20;
+        // Fixed: Use spacing that matches tree count for seamless scrolling
+        let tree_spacing = 60;
+        let tree_offset = (self.scroll_x * 0.5) as i32 % tree_spacing;
+        for i in 0..10 {  // More trees to cover screen + buffer
+            let tx = i * tree_spacing - tree_offset + shake_x;
             let tree_style = i % 3; // 3 different tree styles
             let size_mult = match i % 4 { 0 => 1.2, 1 => 0.8, 2 => 1.0, _ => 0.9 };
             let ty = 155 + shake_y + if i % 2 == 0 { 0 } else { 5 }; // Slight Y variation
@@ -1257,8 +1583,7 @@ impl GameState {
     
     /// Button hints for title screen
     fn draw_controls_hint(&self) {
-        // Control box (centered at bottom for larger screen)
-        // Made wider and opaque for visibility against snow
+        // Control box
         rect!(x = 100, y = 185, w = 184, h = 26, color = 0x222222ff);
         
         // Arrow keys hint
@@ -1274,15 +1599,141 @@ impl GameState {
     }
     
     // ========================================================================
+    // PAUSE SCREEN
+    // ========================================================================
+    
+    fn draw_pause_screen(&self) {
+        // Semi-transparent overlay
+        rect!(x = 0, y = 0, w = SCREEN_W as u32, h = SCREEN_H as u32, color = 0x000000aa);
+        
+        // Pause panel
+        rect!(x = 120, y = 70, w = 144, h = 80, color = 0x222233ee);
+        rect!(x = 122, y = 72, w = 140, h = 76, color = 0x111122ff);
+        
+        text!("PAUSED", x = 155, y = 85, font = "large", color = 0xffffffff);
+        
+        text!("ESC to Resume", x = 145, y = 115, font = "small", color = 0xaaaaaaff);
+        
+        // Show current stats
+        text!("Score: {}", self.score; x = 155, y = 130, font = "small", color = COLOR_GOLD);
+    }
+    
+    // ========================================================================
+    // PARTICLE DRAWING
+    // ========================================================================
+    
+    fn draw_particles(&self, shake_x: i32, shake_y: i32) {
+        for particle in &self.particles {
+            let alpha = ((particle.life as f32 / 50.0) * 255.0).min(255.0) as u32;
+            let color = (particle.color & 0xffffff00) | alpha;
+            let px = particle.x as i32 + shake_x;
+            let py = particle.y as i32 + shake_y;
+            circ!(x = px, y = py, d = particle.size, color = color);
+        }
+    }
+    
+    // ========================================================================
+    // POWER-UP DRAWING
+    // ========================================================================
+    
+    fn draw_powerups(&self, shake_x: i32, shake_y: i32) {
+        for powerup in &self.powerups {
+            if !powerup.active { continue; }
+            
+            let bob_y = powerup.y + (powerup.bob_offset.sin() * 5.0);
+            let px = powerup.x as i32 + shake_x;
+            let py = bob_y as i32 + shake_y;
+            
+            // Glow effect
+            let glow_size = 20 + ((self.frame as f32 / 10.0).sin() * 3.0) as u32;
+            let glow_color = if powerup.kind == POWERUP_HEALTH { 0x44ff4422 } else { 0xffff0022 };
+            circ!(x = px, y = py, d = glow_size, color = glow_color);
+            
+            match powerup.kind {
+                POWERUP_HEALTH => {
+                    // Candy cane
+                    rect!(x = px - 2, y = py - 8, w = 4, h = 16, color = 0xffffffff);
+                    rect!(x = px - 1, y = py - 7, w = 2, h = 3, color = 0xff0000ff);
+                    rect!(x = px - 1, y = py - 1, w = 2, h = 3, color = 0xff0000ff);
+                    rect!(x = px - 1, y = py + 5, w = 2, h = 3, color = 0xff0000ff);
+                    // Hook
+                    rect!(x = px - 6, y = py - 8, w = 6, h = 4, color = 0xffffffff);
+                    rect!(x = px - 7, y = py - 5, w = 4, h = 3, color = 0xff0000ff);
+                }
+                POWERUP_INVINCIBLE => {
+                    // Star
+                    let star_color = if (self.frame / 5) % 2 == 0 { COLOR_GOLD } else { COLOR_STAR };
+                    // Simple star shape
+                    circ!(x = px, y = py, d = 10, color = star_color);
+                    rect!(x = px - 1, y = py - 8, w = 3, h = 16, color = star_color);
+                    rect!(x = px - 8, y = py - 1, w = 16, h = 3, color = star_color);
+                }
+                _ => {}
+            }
+        }
+    }
+    
+    // ========================================================================
+    // COMBO DISPLAY
+    // ========================================================================
+    
+    fn draw_combo(&self) {
+        if self.combo_count >= 2 {
+            let combo_color = match self.combo_count {
+                2..=3 => 0x00ff00ff,
+                4..=5 => 0xffff00ff,
+                _ => 0xff00ffff,
+            };
+            
+            // Pulsing effect
+            let pulse = ((self.frame as f32 / 8.0).sin() * 2.0) as i32;
+            text!("COMBO x{}", self.combo_count; x = 280 + pulse, y = 50, font = "medium", color = combo_color);
+        }
+    }
+    
+    // ========================================================================
+    // FADE OVERLAY
+    // ========================================================================
+    
+    fn draw_fade(&self) {
+        if self.fade_alpha > 0 {
+            let color = 0x000000ff & 0xffffff00 | self.fade_alpha;
+            rect!(x = 0, y = 0, w = SCREEN_W as u32, h = SCREEN_H as u32, color = color);
+        }
+    }
+    
+    // ========================================================================
     // MAIN UPDATE
     // ========================================================================
     
     pub fn update(&mut self) {
         self.frame += 1;
         
+        // Handle pause toggle
+        let kb = keyboard::get();
+        if kb.escape().just_pressed() && (self.mode == MODE_DELIVERING || self.mode == MODE_KRAMPUS || self.mode == MODE_PAUSED) {
+            self.toggle_pause();
+        }
+        
+        // If paused, just draw pause screen and return
+        if self.mode == MODE_PAUSED {
+            self.draw_pause_screen();
+            return;
+        }
+        
         // Decrease effects
         if self.screen_flash > 0 { self.screen_flash -= 1; }
         if self.screen_shake > 0 { self.screen_shake -= 1; }
+        if self.invincible_timer > 0 { self.invincible_timer -= 1; }
+        
+        // Update particles
+        self.update_particles();
+        
+        // Update fade transitions
+        self.update_fade();
+        
+        // Update combo timer
+        self.update_combo();
         
         // Update snowflakes always
         self.update_snowflakes();
@@ -1300,19 +1751,26 @@ impl GameState {
                 self.draw_background(0, 0);
                 self.draw_snowflakes();
                 
+                // Animated title position (subtle bounce)
+                let title_bounce = ((self.frame as f32 / 25.0).sin() * 3.0) as i32;
+                let title_y = 50 + title_bounce;
+                
+                // Title glow effect (pulsing)
+                let glow_alpha = ((self.frame as f32 / 15.0).sin() * 40.0 + 60.0) as u32;
+                let glow_color = 0xffff0000 | glow_alpha;
+                rect!(x = 98, y = 38 + title_bounce, w = 188, h = 44, color = glow_color);
+                
                 // Title background panel
-                rect!(x = 100, y = 40, w = 184, h = 60, color = 0x00000088);
+                rect!(x = 100, y = 40 + title_bounce, w = 184, h = 40, color = 0x00000099);
                 
-                // Title (centered for 384 width)
-                // Title (Refined single line without artifacts)
-                // Title (Refined single line without artifacts)
-                // Shadow
-                text!("SANTA", x = 82, y = 62, font = "large", color = 0x000000ff);
-                text!("DELIVERY", x = 162, y = 62, font = "large", color = 0x000000ff);
-                
-                // Main text
-                text!("SANTA", x = 80, y = 60, font = "large", color = 0xff0000ff);
-                text!("DELIVERY", x = 160, y = 60, font = "large", color = COLOR_GOLD);
+                // Title text with animation
+                // Shadow layer
+                text!("SANTA", x = 112, y = title_y + 2, font = "large", color = 0x00000088);
+                text!("DELIVERY", x = 177, y = title_y + 2, font = "large", color = 0x00000088);
+                // Main text with color pulse
+                let santa_red = if (self.frame / 20) % 2 == 0 { 0xff0000ff } else { 0xff2222ff };
+                text!("SANTA", x = 110, y = title_y, font = "large", color = santa_red);
+                text!("DELIVERY", x = 175, y = title_y, font = "large", color = COLOR_GOLD);
                 
                 // Sleigh preview (centered)
                 let preview_y = 120.0 + (self.frame as f32 / 20.0).sin() * 8.0;
@@ -1369,10 +1827,14 @@ impl GameState {
                 self.update_gifts();
                 self.check_krampus_trigger();
                 self.update_krampus_warning();
+                self.update_powerups();  // NEW: Power-ups
                 
                 // Draw
                 self.draw_background(shake_x, shake_y);
                 self.draw_snowflakes();
+                
+                // Draw power-ups (behind other elements)
+                self.draw_powerups(shake_x, shake_y);
                 
                 // Draw chimneys
                 for chimney in &self.chimneys {
@@ -1386,11 +1848,22 @@ impl GameState {
                     }
                 }
                 
-                // Draw sleigh
+                // Draw particles (above gifts, below sleigh)
+                self.draw_particles(shake_x, shake_y);
+                
+                // Draw sleigh (with star power glow if active)
+                if self.star_power_timer > 0 {
+                    // Draw aura around sleigh
+                    let glow_alpha = ((self.frame as f32 / 5.0).sin() * 50.0 + 150.0) as u32;
+                    circ!(x = PLAYER_X as i32 + shake_x, y = self.player_y as i32 + shake_y, d = 50, color = 0xffff0000 | glow_alpha);
+                }
                 self.draw_sleigh(shake_x, shake_y);
                 
                 // UI
                 self.draw_ui(shake_x, shake_y);
+                
+                // Combo display
+                self.draw_combo();
                 
                 // Tutorial overlay (first game only)
                 if self.tutorial_timer > 0 {
@@ -1455,22 +1928,24 @@ impl GameState {
                 
                 text!("GAME OVER", x = 72, y = 35, font = "large", color = 0xff0000ff);
                 
-                text!("Score: {}", self.score; x = 92, y = 60, font = "medium", color = 0xffffffff);
-                text!("Deliveries: {}", self.deliveries; x = 80, y = 78, font = "small", color = 0x00ff00ff);
-                text!("Level: {}", self.level; x = 100, y = 92, font = "small", color = 0xaaaaaaff);
+                text!("Score: {}", self.score; x = 92, y = 55, font = "medium", color = 0xffffffff);
+                text!("Deliveries: {}", self.deliveries; x = 80, y = 73, font = "small", color = 0x00ff00ff);
+                text!("Max Combo: {}", self.max_combo; x = 80, y = 87, font = "small", color = 0xff00ffff);
+                text!("Level: {}", self.level; x = 100, y = 101, font = "small", color = 0xaaaaaaff);
                 
                 if self.score > self.high_score && self.score > 0 {
                     if (self.frame / 15) % 2 == 0 {
-                        text!("NEW HIGH SCORE!", x = 60, y = 108, font = "medium", color = COLOR_GOLD);
+                        text!("NEW HIGH SCORE!", x = 60, y = 118, font = "medium", color = COLOR_GOLD);
                     }
                 }
                 
                 if (self.frame / 25) % 2 == 0 {
-                    text!("Press START to Retry", x = 56, y = 125, font = "small", color = 0x888888ff);
+                    text!("Press START to Retry", x = 56, y = 135, font = "small", color = 0x888888ff);
                 }
                 
                 let gp = gamepad::get(0);
-                if gp.start.just_pressed() || gp.a.just_pressed() {
+                let kb = keyboard::get();
+                if gp.start.just_pressed() || gp.a.just_pressed() || kb.enter().just_pressed() {
                     self.reset_game();
                 }
             }
@@ -1484,5 +1959,8 @@ impl GameState {
             let flash = (self.flash_color & 0xffffff00) | alpha;
             rect!(x = 0, y = 0, w = SCREEN_W as u32, h = SCREEN_H as u32, color = flash);
         }
+        
+        // Fade transition overlay
+        self.draw_fade();
     }
 }
